@@ -71,13 +71,18 @@ class DocsClient:
         return resp.json()
 
     async def _get_csrf_token(self) -> str:
-        """Fetch a CSRF token from the API (needed for POST with session auth)."""
+        """Fetch a CSRF token from the API (needed for POST with session auth).
+
+        Django's CSRF cookie name may be customized (e.g. docs_csrftoken).
+        We try common names after making a GET request.
+        """
         resp = await self._client.get(f"{_API_PREFIX}/documents/?page_size=1")
         resp.raise_for_status()
-        csrf = self._client.cookies.get("csrftoken")
-        if not csrf:
-            raise ValueError("Could not retrieve CSRF token from the API.")
-        return csrf
+        for name in ("csrftoken", "docs_csrftoken"):
+            csrf = self._client.cookies.get(name)
+            if csrf:
+                return csrf
+        raise ValueError("Could not retrieve CSRF token from the API.")
 
     async def create_document(
         self,
@@ -85,7 +90,14 @@ class DocsClient:
         title: str | None = None,
     ) -> dict:
         """Create a new document from markdown content (multipart upload)."""
-        csrf_token = await self._get_csrf_token()
+        post_headers: dict[str, str] = {
+            "Referer": str(self._client.base_url),
+        }
+        try:
+            csrf_token = await self._get_csrf_token()
+            post_headers["X-CSRFToken"] = csrf_token
+        except ValueError:
+            pass
         files = {"file": ("document.md", markdown_content.encode("utf-8"), "text/markdown")}
         data: dict[str, str] = {}
         if title:
@@ -94,7 +106,7 @@ class DocsClient:
             f"{_API_PREFIX}/documents/",
             files=files,
             data=data,
-            headers={"X-CSRFToken": csrf_token},
+            headers=post_headers,
         )
         resp.raise_for_status()
         return resp.json()
