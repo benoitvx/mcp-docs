@@ -1,6 +1,7 @@
 """HTTP client for the Docs API (La Suite numérique)."""
 
 import os
+import secrets
 
 import httpx
 
@@ -70,19 +71,19 @@ class DocsClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def _get_csrf_token(self) -> str:
-        """Fetch a CSRF token from the API (needed for POST with session auth).
+    def _make_csrf_headers(self) -> dict[str, str]:
+        """Generate CSRF cookie + header for POST requests.
 
-        Django's CSRF cookie name may be customized (e.g. docs_csrftoken).
-        We try common names after making a GET request.
+        Django requires both a csrftoken cookie and a matching X-CSRFToken
+        header. The token must be 64 characters long. We generate one and
+        inject it into both the cookie jar and request headers.
         """
-        resp = await self._client.get(f"{_API_PREFIX}/documents/?page_size=1")
-        resp.raise_for_status()
-        for name in ("csrftoken", "docs_csrftoken"):
-            csrf = self._client.cookies.get(name)
-            if csrf:
-                return csrf
-        raise ValueError("Could not retrieve CSRF token from the API.")
+        csrf_token = secrets.token_hex(32)  # 64 hex chars
+        self._client.cookies.set("csrftoken", csrf_token)
+        return {
+            "X-CSRFToken": csrf_token,
+            "Referer": str(self._client.base_url),
+        }
 
     async def create_document(
         self,
@@ -90,14 +91,6 @@ class DocsClient:
         title: str | None = None,
     ) -> dict:
         """Create a new document from markdown content (multipart upload)."""
-        post_headers: dict[str, str] = {
-            "Referer": str(self._client.base_url),
-        }
-        try:
-            csrf_token = await self._get_csrf_token()
-            post_headers["X-CSRFToken"] = csrf_token
-        except ValueError:
-            pass
         files = {"file": ("document.md", markdown_content.encode("utf-8"), "text/markdown")}
         data: dict[str, str] = {}
         if title:
@@ -106,7 +99,7 @@ class DocsClient:
             f"{_API_PREFIX}/documents/",
             files=files,
             data=data,
-            headers=post_headers,
+            headers=self._make_csrf_headers(),
         )
         resp.raise_for_status()
         return resp.json()

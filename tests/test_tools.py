@@ -115,7 +115,6 @@ class TestGetDocumentContentTool:
 class TestCreateDocumentTool:
     @respx.mock
     async def test_success(self, ctx: MagicMock) -> None:
-        respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
         respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_create_document(ctx=ctx, title="New Document", markdown_content="# Hello")
         data = json.loads(result)
@@ -124,7 +123,6 @@ class TestCreateDocumentTool:
 
     @respx.mock
     async def test_forbidden(self, ctx: MagicMock) -> None:
-        respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
         respx.post(f"{API}/documents/").mock(return_value=Response(403))
         result = await docs_create_document(ctx=ctx, title="Test", markdown_content="content")
         assert "Access denied" in result

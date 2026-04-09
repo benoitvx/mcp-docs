@@ -93,29 +93,17 @@ class TestGetDocumentContent:
 
 class TestCreateDocument:
     @respx.mock
-    async def test_create_document_with_csrf(self, docs_client_session: DocsClient) -> None:
-        csrf_resp = Response(200, json=SAMPLE_DOCUMENTS, headers={"set-cookie": "csrftoken=fake-csrf-token; Path=/"})
-        respx.get(f"{API}/documents/").mock(return_value=csrf_resp)
+    async def test_create_document(self, docs_client_session: DocsClient) -> None:
         route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello", title="New Document")
         assert result["id"] == "aaaa-bbbb-cccc-9999"
         assert route.called
-        assert route.calls[0].request.headers["X-CSRFToken"] == "fake-csrf-token"
-        assert "Referer" in route.calls[0].request.headers
-
-    @respx.mock
-    async def test_create_document_without_csrf(self, docs_client_session: DocsClient) -> None:
-        """When no CSRF cookie is returned, still sends Referer and proceeds."""
-        respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
-        route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
-        result = await docs_client_session.create_document("# Hello", title="New Document")
-        assert result["id"] == "aaaa-bbbb-cccc-9999"
-        assert route.called
+        assert "X-CSRFToken" in route.calls[0].request.headers
+        assert len(route.calls[0].request.headers["X-CSRFToken"]) == 64
         assert "Referer" in route.calls[0].request.headers
 
     @respx.mock
     async def test_create_document_without_title(self, docs_client_session: DocsClient) -> None:
-        respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
         respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello")
         assert result["id"] == "aaaa-bbbb-cccc-9999"
