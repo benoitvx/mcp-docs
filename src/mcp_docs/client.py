@@ -70,17 +70,32 @@ class DocsClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def _get_csrf_token(self) -> str:
+        """Fetch a CSRF token from the API (needed for POST with session auth)."""
+        resp = await self._client.get(f"{_API_PREFIX}/documents/?page_size=1")
+        resp.raise_for_status()
+        csrf = self._client.cookies.get("csrftoken")
+        if not csrf:
+            raise ValueError("Could not retrieve CSRF token from the API.")
+        return csrf
+
     async def create_document(
         self,
         markdown_content: str,
         title: str | None = None,
     ) -> dict:
         """Create a new document from markdown content (multipart upload)."""
+        csrf_token = await self._get_csrf_token()
         files = {"file": ("document.md", markdown_content.encode("utf-8"), "text/markdown")}
         data: dict[str, str] = {}
         if title:
             data["title"] = title
-        resp = await self._client.post(f"{_API_PREFIX}/documents/", files=files, data=data)
+        resp = await self._client.post(
+            f"{_API_PREFIX}/documents/",
+            files=files,
+            data=data,
+            headers={"X-CSRFToken": csrf_token},
+        )
         resp.raise_for_status()
         return resp.json()
 

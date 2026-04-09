@@ -94,13 +94,18 @@ class TestGetDocumentContent:
 class TestCreateDocument:
     @respx.mock
     async def test_create_document(self, docs_client_session: DocsClient) -> None:
+        csrf_resp = Response(200, json=SAMPLE_DOCUMENTS, headers={"set-cookie": "csrftoken=fake-csrf-token; Path=/"})
+        respx.get(f"{API}/documents/").mock(return_value=csrf_resp)
         route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello", title="New Document")
         assert result["id"] == "aaaa-bbbb-cccc-9999"
         assert route.called
+        assert route.calls[0].request.headers["X-CSRFToken"] == "fake-csrf-token"
 
     @respx.mock
     async def test_create_document_without_title(self, docs_client_session: DocsClient) -> None:
+        csrf_resp = Response(200, json=SAMPLE_DOCUMENTS, headers={"set-cookie": "csrftoken=fake-csrf-token; Path=/"})
+        respx.get(f"{API}/documents/").mock(return_value=csrf_resp)
         respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello")
         assert result["id"] == "aaaa-bbbb-cccc-9999"
