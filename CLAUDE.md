@@ -34,13 +34,13 @@ Repo Docs upstream : https://github.com/suitenumerique/docs
 ### Base URLs
 
 - **API interne** (auth par cookie session) : `https://docs.numerique.gouv.fr/api/v1.0/`
-- **API externe** (auth OIDC resource server) : `https://docs.numerique.gouv.fr/external_api/v1.0/` — **non activée en prod à date (avril 2026)**
+- **API externe** (auth OIDC resource server) : `https://docs.numerique.gouv.fr/external_api/v1.0/` — **activée en prod** (confirmé avril 2026, issue #1703)
 
 ### Authentification
 
-**Actuellement (POC)** : cookie de session (`sessionid`) récupéré après login ProConnect.
+**Actuellement (POC)** : cookie de session (`docs_sessionid`) récupéré après login ProConnect. Les requêtes POST nécessitent un token CSRF généré côté client (cookie `csrftoken` de 64 chars + header `X-CSRFToken` + header `Referer`).
 
-**Cible** : OIDC Resource Server via `django-lasuite`. Variables d'environnement :
+**Cible** : OIDC Resource Server via `django-lasuite` sur `/external_api/v1.0/`. L'app doit s'authentifier via ProConnect (Bearer token OIDC). Token exchange à venir. Variables d'environnement côté serveur Docs :
 ```
 OIDC_RESOURCE_SERVER_ENABLED=True
 OIDC_OP_URL=
@@ -99,7 +99,12 @@ GET /api/v1.0/users/me/
 
 - `PUT /api/v1.0/documents/{id}/` — mise à jour du contenu (ne supporte pas l'envoi de Markdown, attend du Yjs base64)
 - `DELETE /api/v1.0/documents/{id}/` — suppression
-- L'API externe (`/external_api/v1.0/`) n'est pas activée en prod — suivre l'issue https://github.com/suitenumerique/docs/issues/1703
+
+### Prochaines étapes
+
+- **Migrer vers l'API externe** (`/external_api/v1.0/`) avec auth OIDC Bearer token via ProConnect (PR #1923, issue #1703)
+- **Implémenter `docs_list_children`** (P2)
+- **Token exchange** — à venir côté La Suite (@jmaupetit)
 
 ---
 
@@ -110,14 +115,22 @@ mcp-docs/
 ├── CLAUDE.md
 ├── README.md
 ├── pyproject.toml
+├── .pre-commit-config.yaml  # gitleaks
+├── .github/
+│   ├── workflows/ci.yml     # CI (lint, typecheck, tests, audit, secrets scan)
+│   └── dependabot.yml       # Mises à jour auto des deps
+├── audits/                  # Rapports d'audit sécurité ANSSI
 ├── src/
 │   └── mcp_docs/
 │       ├── __init__.py
-│       ├── server.py        # Serveur MCP (point d'entrée)
-│       ├── client.py        # Client HTTP pour l'API Docs
+│       ├── app.py           # Instance FastMCP + lifespan (évite imports circulaires)
+│       ├── server.py        # Entry point main()
+│       ├── client.py        # Client HTTP pour l'API Docs (DocsClient)
 │       └── tools.py         # Définition des tools MCP
 └── tests/
-    └── ...
+    ├── conftest.py          # Fixtures + respx mocks
+    ├── test_client.py       # Tests unitaires client HTTP
+    └── test_tools.py        # Tests des tools MCP
 ```
 
 ---
@@ -161,16 +174,16 @@ async def create_document(title: str, markdown_content: str) -> str:
 
 Doc MCP SDK : https://modelcontextprotocol.io/
 
-### Tools MCP à implémenter
+### Tools MCP
 
-| Tool | Description | Priorité |
-|------|-------------|----------|
-| `list_documents` | Lister les documents (paginé, filtrable) | P0 |
-| `get_document_content` | Récupérer le contenu en markdown/html/json | P0 |
-| `create_document` | Créer un document depuis du Markdown | P0 |
-| `search_documents` | Rechercher par titre ou contenu | P1 |
-| `get_me` | Infos de l'utilisateur connecté | P1 |
-| `list_children` | Lister les sous-documents | P2 |
+| Tool | Description | Priorité | Statut |
+|------|-------------|----------|--------|
+| `docs_list_documents` | Lister les documents (paginé, filtrable) | P0 | ✅ |
+| `docs_get_document_content` | Récupérer le contenu en markdown/html/json | P0 | ✅ |
+| `docs_create_document` | Créer un document depuis du Markdown | P0 | ✅ |
+| `docs_search_documents` | Rechercher par titre ou contenu | P1 | ✅ |
+| `docs_get_me` | Infos de l'utilisateur connecté | P1 | ✅ |
+| `docs_list_children` | Lister les sous-documents | P2 | ❌ |
 
 ---
 
@@ -259,7 +272,7 @@ DOCS_BASE_URL=https://docs.numerique.gouv.fr
 DOCS_AUTH_MODE=session
 
 # Pour auth session (POC)
-DOCS_SESSION_COOKIE=<sessionid value>
+DOCS_SESSION_COOKIE=<docs_sessionid value>
 
 # Pour auth OIDC (cible)
 DOCS_OIDC_TOKEN=<bearer token>
