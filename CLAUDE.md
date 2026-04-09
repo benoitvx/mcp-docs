@@ -198,6 +198,23 @@ Pour toute tâche non triviale (3+ étapes ou décision d'architecture) :
 3. Cocher les items au fur et à mesure
 4. Ajouter une section "résultat" à la fin
 
+### Task Management (`tasks/`)
+
+```
+tasks/
+├── todo.md      # Current plan: checkable items, final result
+└── lessons.md   # Error patterns encountered on this project
+```
+
+`tasks/todo.md` est réinitialisé pour chaque nouvelle tâche. `tasks/lessons.md` est cumulatif.
+
+### Self-Improvement Loop
+
+Après toute correction de l'utilisateur :
+
+1. Mettre à jour `tasks/lessons.md` avec le pattern d'erreur et la règle à retenir
+2. Relire `tasks/lessons.md` au début de chaque session pour éviter de répéter les mêmes erreurs
+
 ### Bug Fixing
 
 Face à un bug : le corriger directement. Pointer les logs, erreurs et tests en échec — puis résoudre.
