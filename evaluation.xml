@@ -1,0 +1,89 @@
+<!--
+  MCP Server Evaluation — mcp-docs
+
+  These Q&A pairs test that an LLM with access ONLY to the mcp-docs MCP server
+  can answer realistic questions requiring one or more tool calls.
+
+  Prerequisites:
+  - A test account with at least 5 documents, including:
+    - A document titled "Compte rendu Data Platform" with markdown content
+    - A parent document with at least 1 child sub-page
+  - Stable test data (answers below must match the test environment)
+
+  To run: use the mcp-builder evaluation runner or manually verify each pair.
+
+  IMPORTANT: Update <answer> values to match your test environment before running.
+-->
+<evaluation>
+
+  <!-- Q1: Single tool — docs_get_me -->
+  <qa_pair>
+    <question>What is the email address of the currently authenticated user?</question>
+    <answer>PLACEHOLDER@example.gouv.fr</answer>
+    <tools_exercised>docs_get_me</tools_exercised>
+  </qa_pair>
+
+  <!-- Q2: Single tool — docs_get_me (different field) -->
+  <qa_pair>
+    <question>What is the full name of the currently authenticated user? Answer with "First Last" format.</question>
+    <answer>PLACEHOLDER NAME</answer>
+    <tools_exercised>docs_get_me</tools_exercised>
+  </qa_pair>
+
+  <!-- Q3: Single tool — docs_list_documents -->
+  <qa_pair>
+    <question>How many documents does the authenticated user have access to in total? Answer with just the number.</question>
+    <answer>PLACEHOLDER_COUNT</answer>
+    <tools_exercised>docs_list_documents</tools_exercised>
+  </qa_pair>
+
+  <!-- Q4: Single tool — docs_search_documents -->
+  <qa_pair>
+    <question>Search for documents containing "compte rendu". How many results are returned? Answer with just the number.</question>
+    <answer>PLACEHOLDER_COUNT</answer>
+    <tools_exercised>docs_search_documents</tools_exercised>
+  </qa_pair>
+
+  <!-- Q5: Multi-tool — docs_list_documents + docs_get_document_content -->
+  <qa_pair>
+    <question>What is the first heading (line starting with #) in the most recently updated document? Include the # symbol.</question>
+    <answer># PLACEHOLDER HEADING</answer>
+    <tools_exercised>docs_list_documents, docs_get_document_content</tools_exercised>
+  </qa_pair>
+
+  <!-- Q6: Multi-tool — docs_search_documents + docs_get_document_content -->
+  <qa_pair>
+    <question>Search for "Data Platform", then retrieve the content of the first result in markdown format. Does the document contain the word "MCP"? Answer True or False.</question>
+    <answer>True</answer>
+    <tools_exercised>docs_search_documents, docs_get_document_content</tools_exercised>
+  </qa_pair>
+
+  <!-- Q7: Single tool — docs_list_children -->
+  <qa_pair>
+    <question>How many child sub-pages does the document titled "Compte rendu Data Platform" have? First search for the document to find its ID, then list its children. Answer with just the number.</question>
+    <answer>PLACEHOLDER_COUNT</answer>
+    <tools_exercised>docs_search_documents, docs_list_children</tools_exercised>
+  </qa_pair>
+
+  <!-- Q8: Multi-tool — docs_list_documents (pagination) -->
+  <qa_pair>
+    <question>List documents with page_size=2. What is the title of the second document on page 1? Answer with the exact title.</question>
+    <answer>PLACEHOLDER TITLE</answer>
+    <tools_exercised>docs_list_documents</tools_exercised>
+  </qa_pair>
+
+  <!-- Q9: Multi-tool — docs_list_documents + docs_get_document_content (format) -->
+  <qa_pair>
+    <question>Retrieve the content of the oldest document (by created_at) in HTML format. Does the HTML contain a &lt;p&gt; tag? Answer True or False.</question>
+    <answer>True</answer>
+    <tools_exercised>docs_list_documents, docs_get_document_content</tools_exercised>
+  </qa_pair>
+
+  <!-- Q10: Multi-tool — docs_create_document + docs_get_document_content -->
+  <qa_pair>
+    <question>Create a document titled "MCP Eval Test" with markdown content "# Test\n\nThis is an evaluation test." Then retrieve its content in markdown format. Does the retrieved content contain "evaluation test"? Answer True or False.</question>
+    <answer>True</answer>
+    <tools_exercised>docs_create_document, docs_get_document_content</tools_exercised>
+  </qa_pair>
+
+</evaluation>

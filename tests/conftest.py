@@ -65,3 +65,17 @@ SAMPLE_USER = {
     "email": "user@example.gouv.fr",
     "name": "Test User",
 }
+
+SAMPLE_CHILDREN = {
+    "count": 1,
+    "next": None,
+    "previous": None,
+    "results": [
+        {
+            "id": "aaaa-bbbb-cccc-child-01",
+            "title": "Child Document",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-04-05T14:00:00Z",
+        },
+    ],
+}

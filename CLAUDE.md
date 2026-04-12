@@ -103,7 +103,7 @@ GET /api/v1.0/users/me/
 ### Prochaines étapes
 
 - **Migrer vers l'API externe** (`/external_api/v1.0/`) avec auth OIDC Bearer token via ProConnect (PR #1923, issue #1703)
-- **Implémenter `docs_list_children`** (P2)
+- ~~**Implémenter `docs_list_children`** (P2)~~ ✅ Fait
 - **Token exchange** — à venir côté La Suite (@jmaupetit)
 
 ---
@@ -183,7 +183,7 @@ Doc MCP SDK : https://modelcontextprotocol.io/
 | `docs_create_document` | Créer un document depuis du Markdown | P0 | ✅ |
 | `docs_search_documents` | Rechercher par titre ou contenu | P1 | ✅ |
 | `docs_get_me` | Infos de l'utilisateur connecté | P1 | ✅ |
-| `docs_list_children` | Lister les sous-documents | P2 | ❌ |
+| `docs_list_children` | Lister les sous-documents | P2 | ✅ |
 
 ---
 

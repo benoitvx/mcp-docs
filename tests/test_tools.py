@@ -13,12 +13,14 @@ from mcp_docs.tools import (
     docs_create_document,
     docs_get_document_content,
     docs_get_me,
+    docs_list_children,
     docs_list_documents,
     docs_search_documents,
 )
 
 from .conftest import (
     BASE_URL,
+    SAMPLE_CHILDREN,
     SAMPLE_CONTENT,
     SAMPLE_CREATED,
     SAMPLE_DOCUMENTS,
@@ -151,6 +153,16 @@ class TestSearchDocumentsTool:
         result = await docs_search_documents(ctx=ctx, query="")
         assert "Error" in result
 
+    async def test_invalid_page_size(self, ctx: MagicMock) -> None:
+        result = await docs_search_documents(ctx=ctx, query="test", page_size=200)
+        assert "Error" in result
+
+    @respx.mock
+    async def test_server_error(self, ctx: MagicMock) -> None:
+        respx.get(f"{API}/documents/").mock(return_value=Response(500))
+        result = await docs_search_documents(ctx=ctx, query="test")
+        assert "Request failed (HTTP 500)" in result
+
 
 # --- docs_get_me ---
 
@@ -168,3 +180,44 @@ class TestGetMeTool:
         respx.get(f"{API}/users/me/").mock(return_value=Response(401))
         result = await docs_get_me(ctx=ctx)
         assert "Authentication failed" in result
+
+
+# --- docs_list_children ---
+
+
+class TestListChildrenTool:
+    @respx.mock
+    async def test_success(self, ctx: MagicMock) -> None:
+        parent_id = "aaaa-bbbb-cccc-0001"
+        respx.get(f"{API}/documents/{parent_id}/children/").mock(
+            return_value=Response(200, json=SAMPLE_CHILDREN)
+        )
+        result = await docs_list_children(ctx=ctx, document_id=parent_id)
+        data = json.loads(result)
+        assert data["count"] == 1
+        assert len(data["documents"]) == 1
+        assert data["documents"][0]["id"] == "aaaa-bbbb-cccc-child-01"
+
+    @respx.mock
+    async def test_auth_error(self, ctx: MagicMock) -> None:
+        respx.get(f"{API}/documents/some-id/children/").mock(return_value=Response(401))
+        result = await docs_list_children(ctx=ctx, document_id="some-id")
+        assert "Authentication failed" in result
+
+    @respx.mock
+    async def test_not_found(self, ctx: MagicMock) -> None:
+        respx.get(f"{API}/documents/bad-id/children/").mock(return_value=Response(404))
+        result = await docs_list_children(ctx=ctx, document_id="bad-id")
+        assert "not found" in result.lower()
+
+    async def test_empty_document_id(self, ctx: MagicMock) -> None:
+        result = await docs_list_children(ctx=ctx, document_id="")
+        assert "Error" in result
+
+    async def test_invalid_page(self, ctx: MagicMock) -> None:
+        result = await docs_list_children(ctx=ctx, document_id="some-id", page=0)
+        assert "Error" in result
+
+    async def test_invalid_page_size(self, ctx: MagicMock) -> None:
+        result = await docs_list_children(ctx=ctx, document_id="some-id", page_size=200)
+        assert "Error" in result

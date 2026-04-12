@@ -188,3 +188,52 @@ async def docs_get_me(ctx: Context) -> str:
         return _error_response(e)
 
     return json.dumps(data, ensure_ascii=False)
+
+
+# --- P2 Tools ---
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+)
+async def docs_list_children(
+    ctx: Context,
+    document_id: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> str:
+    """List child documents (sub-pages) of a given parent document.
+
+    Args:
+        document_id: UUID of the parent document.
+        page: Page number (starts at 1).
+        page_size: Number of results per page (1-100).
+    """
+    if not document_id or not document_id.strip():
+        return "Error: document_id is required."
+    if page < 1:
+        return "Error: page must be >= 1."
+    if not 1 <= page_size <= 100:
+        return "Error: page_size must be between 1 and 100."
+
+    try:
+        data = await _get_client(ctx).list_children(document_id, page=page, page_size=page_size)
+    except httpx.HTTPStatusError as e:
+        return _error_response(e)
+
+    results = data.get("results", [])
+    summary = {
+        "count": data.get("count", 0),
+        "page": page,
+        "page_size": page_size,
+        "documents": [
+            {
+                "id": doc["id"],
+                "title": doc.get("title", ""),
+                "created_at": doc.get("created_at", ""),
+                "updated_at": doc.get("updated_at", ""),
+            }
+            for doc in results
+        ],
+    }
+    return json.dumps(summary, ensure_ascii=False)
