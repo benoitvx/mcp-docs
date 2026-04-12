@@ -107,10 +107,19 @@ class TestCreateDocument:
         assert "Referer" in route.calls[0].request.headers
 
     @respx.mock
+    async def test_create_document_filename_uses_title(self, docs_client_session: DocsClient) -> None:
+        route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
+        await docs_client_session.create_document("# Hello", title="Mon rapport")
+        body = route.calls[0].request.content.decode("utf-8")
+        assert 'filename="Mon rapport.md"' in body
+
+    @respx.mock
     async def test_create_document_without_title(self, docs_client_session: DocsClient) -> None:
-        respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
+        route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello")
         assert result["id"] == "aaaa-bbbb-cccc-9999"
+        body = route.calls[0].request.content.decode("utf-8")
+        assert 'filename="document.md"' in body
 
 
 # --- search_documents ---

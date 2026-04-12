@@ -128,7 +128,8 @@ class DocsClient:
         title: str | None = None,
     ) -> dict:
         """Create a new document from markdown content (multipart upload)."""
-        files = {"file": ("document.md", markdown_content.encode("utf-8"), "text/markdown")}
+        filename = f"{title}.md" if title else "document.md"
+        files = {"file": (filename, markdown_content.encode("utf-8"), "text/markdown")}
         data: dict[str, str] = {}
         if title:
             data["title"] = title
