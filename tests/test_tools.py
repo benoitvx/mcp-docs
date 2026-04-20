@@ -25,6 +25,7 @@ from .conftest import (
     SAMPLE_CREATED,
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
+    make_config,
 )
 
 API = f"{BASE_URL}/api/v1.0"
@@ -32,14 +33,14 @@ API = f"{BASE_URL}/api/v1.0"
 
 @pytest.fixture
 def docs_client() -> DocsClient:
-    return DocsClient(base_url=BASE_URL, auth_mode="session", session_cookie="test")
+    return DocsClient(make_config())
 
 
 @pytest.fixture
 def ctx(docs_client: DocsClient) -> MagicMock:
     """Mock MCP Context with lifespan_context."""
     context = MagicMock()
-    context.request_context.lifespan_context = AppContext(client=docs_client)
+    context.request_context.lifespan_context = AppContext(config=make_config(), client=docs_client)
     return context
 
 

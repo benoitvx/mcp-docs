@@ -3,12 +3,12 @@
 import json
 import logging
 
-import httpx
 from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
 
 from mcp_docs.app import AppContext, mcp
 from mcp_docs.client import DocsClient
+from mcp_docs.exceptions import DocsAPIError, DocsAuthError, DocsNotFoundError, DocsPermissionError
 
 
 def _get_client(ctx: Context) -> DocsClient:
@@ -20,17 +20,16 @@ def _get_client(ctx: Context) -> DocsClient:
 logger = logging.getLogger(__name__)
 
 
-def _error_response(err: httpx.HTTPStatusError) -> str:
+def _error_response(err: DocsAPIError) -> str:
     """Return a safe error message without leaking internal details."""
-    logger.warning("API error: %s %s → HTTP %d", err.request.method, err.request.url.path, err.response.status_code)
-    status = err.response.status_code
-    if status == 401:
+    logger.warning("API error: HTTP %d — %s", err.status_code, err.message)
+    if isinstance(err, DocsAuthError):
         return "Authentication failed. Please check your credentials."
-    if status == 403:
+    if isinstance(err, DocsPermissionError):
         return "Access denied. You don't have permission to perform this action."
-    if status == 404:
+    if isinstance(err, DocsNotFoundError):
         return "Document not found."
-    return f"Request failed (HTTP {status})."
+    return f"Request failed (HTTP {err.status_code})."
 
 
 # --- P0 Tools ---
@@ -55,22 +54,21 @@ async def docs_list_documents(
 
     try:
         data = await _get_client(ctx).list_documents(page=page, page_size=page_size)
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
-    results = data.get("results", [])
     summary = {
-        "count": data.get("count", 0),
+        "count": data.count,
         "page": page,
         "page_size": page_size,
         "documents": [
             {
-                "id": doc["id"],
-                "title": doc.get("title", ""),
-                "created_at": doc.get("created_at", ""),
-                "updated_at": doc.get("updated_at", ""),
+                "id": doc.id,
+                "title": doc.title,
+                "created_at": doc.created_at.isoformat() if doc.created_at else "",
+                "updated_at": doc.updated_at.isoformat() if doc.updated_at else "",
             }
-            for doc in results
+            for doc in data.results
         ],
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -97,15 +95,13 @@ async def docs_get_document_content(
 
     try:
         data = await _get_client(ctx).get_document_content(document_id, content_format)
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
     if content_format == "markdown":
-        title = data.get("title", "")
-        content = data.get("content", "")
-        return f"# {title}\n\n{content}" if title else content
+        return f"# {data.title}\n\n{data.content}" if data.title else data.content
 
-    return json.dumps(data, ensure_ascii=False)
+    return data.model_dump_json()
 
 
 @mcp.tool(
@@ -129,10 +125,10 @@ async def docs_create_document(
 
     try:
         data = await _get_client(ctx).create_document(markdown_content, title=title)
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
-    return json.dumps({"id": data["id"], "title": data.get("title", title)}, ensure_ascii=False)
+    return json.dumps({"id": data.id, "title": data.title or title}, ensure_ascii=False)
 
 
 # --- P1 Tools ---
@@ -159,19 +155,18 @@ async def docs_search_documents(
 
     try:
         data = await _get_client(ctx).search_documents(query, page_size=page_size)
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
-    results = data.get("results", [])
     summary = {
-        "count": data.get("count", 0),
+        "count": data.count,
         "documents": [
             {
-                "id": doc["id"],
-                "title": doc.get("title", ""),
-                "updated_at": doc.get("updated_at", ""),
+                "id": doc.id,
+                "title": doc.title,
+                "updated_at": doc.updated_at.isoformat() if doc.updated_at else "",
             }
-            for doc in results
+            for doc in data.results
         ],
     }
     return json.dumps(summary, ensure_ascii=False)
@@ -184,10 +179,10 @@ async def docs_get_me(ctx: Context) -> str:
     """Get information about the currently authenticated user."""
     try:
         data = await _get_client(ctx).get_me()
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
-    return json.dumps(data, ensure_ascii=False)
+    return data.model_dump_json()
 
 
 # --- P2 Tools ---
@@ -218,22 +213,21 @@ async def docs_list_children(
 
     try:
         data = await _get_client(ctx).list_children(document_id, page=page, page_size=page_size)
-    except httpx.HTTPStatusError as e:
+    except DocsAPIError as e:
         return _error_response(e)
 
-    results = data.get("results", [])
     summary = {
-        "count": data.get("count", 0),
+        "count": data.count,
         "page": page,
         "page_size": page_size,
         "documents": [
             {
-                "id": doc["id"],
-                "title": doc.get("title", ""),
-                "created_at": doc.get("created_at", ""),
-                "updated_at": doc.get("updated_at", ""),
+                "id": doc.id,
+                "title": doc.title,
+                "created_at": doc.created_at.isoformat() if doc.created_at else "",
+                "updated_at": doc.updated_at.isoformat() if doc.updated_at else "",
             }
-            for doc in results
+            for doc in data.results
         ],
     }
     return json.dumps(summary, ensure_ascii=False)

@@ -7,7 +7,9 @@ import pytest
 import respx
 from httpx import Response
 
-from mcp_docs.client import DocsClient, create_client_from_env
+from mcp_docs.client import DocsClient
+from mcp_docs.config import DocsConfig
+from mcp_docs.exceptions import DocsAPIError, DocsAuthError, DocsNotFoundError, DocsRateLimitError
 
 from .conftest import (
     BASE_URL,
@@ -16,6 +18,7 @@ from .conftest import (
     SAMPLE_CREATED,
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
+    make_config,
 )
 
 API = f"{BASE_URL}/api/v1.0"
@@ -33,16 +36,16 @@ class TestAuth:
         assert docs_client_oidc._client.headers["Authorization"] == "Bearer test-oidc-token"
 
     def test_missing_session_cookie_raises(self) -> None:
-        with pytest.raises(ValueError, match="DOCS_SESSION_COOKIE"):
-            DocsClient(base_url=BASE_URL, auth_mode="session")
+        with pytest.raises(Exception, match="DOCS_SESSION_COOKIE"):
+            DocsConfig(base_url=BASE_URL, auth_mode="session")
 
     def test_missing_oidc_token_raises(self) -> None:
-        with pytest.raises(ValueError, match="DOCS_OIDC_TOKEN"):
-            DocsClient(base_url=BASE_URL, auth_mode="oidc")
+        with pytest.raises(Exception, match="DOCS_OIDC_TOKEN"):
+            DocsConfig(base_url=BASE_URL, auth_mode="oidc")
 
     def test_unknown_auth_mode_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown auth_mode"):
-            DocsClient(base_url=BASE_URL, auth_mode="magic")
+        with pytest.raises(Exception):
+            DocsConfig(base_url=BASE_URL, auth_mode="magic", session_cookie="x")  # type: ignore[arg-type]
 
 
 # --- list_documents ---
@@ -53,8 +56,8 @@ class TestListDocuments:
     async def test_list_documents(self, docs_client_session: DocsClient) -> None:
         route = respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
         result = await docs_client_session.list_documents()
-        assert result["count"] == 2
-        assert len(result["results"]) == 2
+        assert result.count == 2
+        assert len(result.results) == 2
         assert route.called
         assert route.calls[0].request.url.params["page_size"] == "20"
         assert route.calls[0].request.url.params["ordering"] == "-updated_at"
@@ -67,7 +70,7 @@ class TestListDocuments:
     @respx.mock
     async def test_list_documents_error(self, docs_client_session: DocsClient) -> None:
         respx.get(f"{API}/documents/").mock(return_value=Response(500))
-        with pytest.raises(Exception):
+        with pytest.raises(DocsAPIError):
             await docs_client_session.list_documents()
 
 
@@ -82,13 +85,13 @@ class TestGetDocumentContent:
             return_value=Response(200, json=SAMPLE_CONTENT)
         )
         result = await docs_client_session.get_document_content(doc_id)
-        assert result["content"] == "Hello **world**"
+        assert result.content == "Hello **world**"
         assert route.calls[0].request.url.params["content_format"] == "markdown"
 
     @respx.mock
     async def test_get_content_404(self, docs_client_session: DocsClient) -> None:
         respx.get(f"{API}/documents/nonexistent/content/").mock(return_value=Response(404))
-        with pytest.raises(Exception):
+        with pytest.raises(DocsNotFoundError):
             await docs_client_session.get_document_content("nonexistent")
 
 
@@ -100,7 +103,7 @@ class TestCreateDocument:
     async def test_create_document(self, docs_client_session: DocsClient) -> None:
         route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello", title="New Document")
-        assert result["id"] == "aaaa-bbbb-cccc-9999"
+        assert result.id == "aaaa-bbbb-cccc-9999"
         assert route.called
         assert "X-CSRFToken" in route.calls[0].request.headers
         assert len(route.calls[0].request.headers["X-CSRFToken"]) == 64
@@ -117,7 +120,7 @@ class TestCreateDocument:
     async def test_create_document_without_title(self, docs_client_session: DocsClient) -> None:
         route = respx.post(f"{API}/documents/").mock(return_value=Response(201, json=SAMPLE_CREATED))
         result = await docs_client_session.create_document("# Hello")
-        assert result["id"] == "aaaa-bbbb-cccc-9999"
+        assert result.id == "aaaa-bbbb-cccc-9999"
         body = route.calls[0].request.content.decode("utf-8")
         assert 'filename="document.md"' in body
 
@@ -130,7 +133,7 @@ class TestSearchDocuments:
     async def test_search(self, docs_client_session: DocsClient) -> None:
         route = respx.get(f"{API}/documents/").mock(return_value=Response(200, json=SAMPLE_DOCUMENTS))
         result = await docs_client_session.search_documents("test")
-        assert result["count"] == 2
+        assert result.count == 2
         assert route.calls[0].request.url.params["q"] == "test"
 
 
@@ -142,7 +145,7 @@ class TestGetMe:
     async def test_get_me(self, docs_client_session: DocsClient) -> None:
         respx.get(f"{API}/users/me/").mock(return_value=Response(200, json=SAMPLE_USER))
         result = await docs_client_session.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
 
 
 # --- list_children ---
@@ -156,15 +159,15 @@ class TestListChildren:
             return_value=Response(200, json=SAMPLE_CHILDREN)
         )
         result = await docs_client_session.list_children(parent_id)
-        assert result["count"] == 1
-        assert len(result["results"]) == 1
+        assert result.count == 1
+        assert len(result.results) == 1
         assert route.called
         assert route.calls[0].request.url.params["page_size"] == "20"
 
     @respx.mock
     async def test_list_children_error(self, docs_client_session: DocsClient) -> None:
         respx.get(f"{API}/documents/bad-id/children/").mock(return_value=Response(404))
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsNotFoundError):
             await docs_client_session.list_children("bad-id")
 
 
@@ -178,7 +181,7 @@ class TestRetry:
             side_effect=[Response(502), Response(200, json=SAMPLE_USER)]
         )
         result = await docs_client_session.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
         assert route.call_count == 2
 
     @respx.mock
@@ -187,7 +190,7 @@ class TestRetry:
             side_effect=[Response(503), Response(200, json=SAMPLE_USER)]
         )
         result = await docs_client_session.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
         assert route.call_count == 2
 
     @respx.mock
@@ -196,7 +199,7 @@ class TestRetry:
             side_effect=[Response(429), Response(200, json=SAMPLE_USER)]
         )
         result = await docs_client_session.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
         assert route.call_count == 2
 
     @respx.mock
@@ -205,7 +208,7 @@ class TestRetry:
             side_effect=[httpx.ReadTimeout("timeout"), Response(200, json=SAMPLE_USER)]
         )
         result = await docs_client_session.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
         assert route.call_count == 2
 
     @respx.mock
@@ -220,7 +223,7 @@ class TestRetry:
     @respx.mock
     async def test_no_retry_on_404(self, docs_client_session: DocsClient) -> None:
         route = respx.get(f"{API}/documents/bad-id/content/").mock(return_value=Response(404))
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsNotFoundError):
             await docs_client_session.get_document_content("bad-id")
         assert route.call_count == 1
 
@@ -229,23 +232,21 @@ class TestRetry:
         respx.get(f"{API}/users/me/").mock(
             side_effect=[Response(503), Response(503), Response(503), Response(503)]
         )
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsAPIError):
             await docs_client_session.get_me()
 
     @respx.mock
     async def test_retry_disabled(self) -> None:
-        client = DocsClient(
-            base_url=BASE_URL, auth_mode="session", session_cookie="x", max_retries=0
-        )
+        client = DocsClient(make_config(max_retries=0))
         route = respx.get(f"{API}/users/me/").mock(return_value=Response(502))
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsAPIError):
             await client.get_me()
         assert route.call_count == 1
 
     @respx.mock
     async def test_post_no_retry(self, docs_client_session: DocsClient) -> None:
         route = respx.post(f"{API}/documents/").mock(return_value=Response(502))
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsAPIError):
             await docs_client_session.create_document("# Test", title="Test")
         assert route.call_count == 1
 
@@ -256,9 +257,7 @@ class TestRetry:
 class TestRateLimiting:
     @respx.mock
     async def test_concurrent_requests_limited(self) -> None:
-        client = DocsClient(
-            base_url=BASE_URL, auth_mode="session", session_cookie="x", max_concurrent=2
-        )
+        client = DocsClient(make_config(max_concurrent=2))
         peak_concurrent = 0
         current_concurrent = 0
 
@@ -276,29 +275,27 @@ class TestRateLimiting:
 
     @respx.mock
     async def test_semaphore_released_on_error(self) -> None:
-        client = DocsClient(
-            base_url=BASE_URL, auth_mode="session", session_cookie="x",
-            max_concurrent=1, max_retries=0,
-        )
+        client = DocsClient(make_config(max_concurrent=1, max_retries=0))
         respx.get(f"{API}/users/me/").mock(
             side_effect=[Response(404), Response(200, json=SAMPLE_USER)]
         )
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(DocsNotFoundError):
             await client.get_me()
         # Semaphore should be released — next call should succeed
         result = await client.get_me()
-        assert result["email"] == "user@example.gouv.fr"
+        assert result.email == "user@example.gouv.fr"
 
 
-# --- create_client_from_env ---
+# --- config-based factory ---
 
 
-class TestFactory:
+class TestConfigFactory:
     def test_create_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCS_BASE_URL", "https://custom.local")
         monkeypatch.setenv("DOCS_AUTH_MODE", "session")
         monkeypatch.setenv("DOCS_SESSION_COOKIE", "abc123")
-        client = create_client_from_env()
+        config = DocsConfig()
+        client = DocsClient(config)
         assert str(client._client.base_url) == "https://custom.local"
 
     def test_create_from_env_with_retry_and_concurrency(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,7 +303,8 @@ class TestFactory:
         monkeypatch.setenv("DOCS_SESSION_COOKIE", "abc123")
         monkeypatch.setenv("DOCS_MAX_RETRIES", "5")
         monkeypatch.setenv("DOCS_MAX_CONCURRENT", "10")
-        client = create_client_from_env()
+        config = DocsConfig()
+        client = DocsClient(config)
         assert client._max_retries == 5
         assert client._semaphore._value == 10
 
@@ -314,8 +312,47 @@ class TestFactory:
         await docs_client_session.close()
         assert docs_client_session._client.is_closed
 
-    def test_create_from_env_missing_cookie(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_cookie_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DOCS_AUTH_MODE", "session")
         monkeypatch.delenv("DOCS_SESSION_COOKIE", raising=False)
-        with pytest.raises(ValueError):
-            create_client_from_env()
+        with pytest.raises(Exception):
+            DocsConfig()
+
+
+# --- exception mapping ---
+
+
+class TestExceptionMapping:
+    @respx.mock
+    async def test_401_raises_auth_error(self, docs_client_session: DocsClient) -> None:
+        respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+        with pytest.raises(DocsAuthError):
+            await docs_client_session.get_me()
+
+    @respx.mock
+    async def test_403_raises_permission_error(self, docs_client_session: DocsClient) -> None:
+        from mcp_docs.exceptions import DocsPermissionError
+
+        respx.get(f"{API}/users/me/").mock(return_value=Response(403))
+        with pytest.raises(DocsPermissionError):
+            await docs_client_session.get_me()
+
+    @respx.mock
+    async def test_404_raises_not_found_error(self, docs_client_session: DocsClient) -> None:
+        respx.get(f"{API}/documents/bad/content/").mock(return_value=Response(404))
+        with pytest.raises(DocsNotFoundError):
+            await docs_client_session.get_document_content("bad")
+
+    @respx.mock
+    async def test_429_raises_rate_limit_error(self, docs_client_session: DocsClient) -> None:
+        # 429 is retryable, so we need max_retries=0 to see the exception immediately
+        client = DocsClient(make_config(max_retries=0))
+        respx.get(f"{API}/users/me/").mock(return_value=Response(429))
+        with pytest.raises(DocsRateLimitError):
+            await client.get_me()
+
+    @respx.mock
+    async def test_500_raises_base_api_error(self, docs_client_session: DocsClient) -> None:
+        respx.get(f"{API}/users/me/").mock(return_value=Response(500))
+        with pytest.raises(DocsAPIError):
+            await docs_client_session.get_me()

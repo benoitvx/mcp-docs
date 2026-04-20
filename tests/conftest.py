@@ -3,28 +3,32 @@
 import pytest
 
 from mcp_docs.client import DocsClient
+from mcp_docs.config import DocsConfig
 
 BASE_URL = "https://docs.test.local"
+
+
+def make_config(**overrides: object) -> DocsConfig:
+    """Create a DocsConfig with test defaults, overridable per-field."""
+    defaults: dict[str, object] = {
+        "base_url": BASE_URL,
+        "auth_mode": "session",
+        "session_cookie": "test-session-id",
+    }
+    defaults.update(overrides)
+    return DocsConfig(**defaults)  # type: ignore[arg-type]
 
 
 @pytest.fixture
 def docs_client_session() -> DocsClient:
     """DocsClient configured with session cookie auth."""
-    return DocsClient(
-        base_url=BASE_URL,
-        auth_mode="session",
-        session_cookie="test-session-id",
-    )
+    return DocsClient(make_config())
 
 
 @pytest.fixture
 def docs_client_oidc() -> DocsClient:
     """DocsClient configured with OIDC bearer token auth."""
-    return DocsClient(
-        base_url=BASE_URL,
-        auth_mode="oidc",
-        oidc_token="test-oidc-token",
-    )
+    return DocsClient(make_config(auth_mode="oidc", session_cookie=None, oidc_token="test-oidc-token"))
 
 
 SAMPLE_DOCUMENTS = {

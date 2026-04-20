@@ -6,22 +6,25 @@ from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_docs.client import DocsClient, create_client_from_env
+from mcp_docs.client import DocsClient
+from mcp_docs.config import DocsConfig
 
 
 @dataclass
 class AppContext:
     """Application context holding shared resources."""
 
+    config: DocsConfig
     client: DocsClient
 
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage DocsClient lifecycle."""
-    client = create_client_from_env()
+    config = DocsConfig()
+    client = DocsClient(config)
     try:
-        yield AppContext(client=client)
+        yield AppContext(config=config, client=client)
     finally:
         await client.close()
 
