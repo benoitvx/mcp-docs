@@ -128,6 +128,40 @@ class TestCreateDocument:
 # --- search_documents ---
 
 
+class TestDeleteDocument:
+    @respx.mock
+    async def test_delete(self, docs_client_session: DocsClient) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        route = respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        await docs_client_session.delete_document(doc_id)
+        assert route.called
+        assert "X-CSRFToken" in route.calls[0].request.headers
+
+    @respx.mock
+    async def test_delete_404(self, docs_client_session: DocsClient) -> None:
+        respx.delete(f"{API}/documents/missing/").mock(return_value=Response(404))
+        with pytest.raises(DocsNotFoundError):
+            await docs_client_session.delete_document("missing")
+
+
+class TestListAccesses:
+    @respx.mock
+    async def test_list_accesses_returns_list(self, docs_client_session: DocsClient) -> None:
+        """The accesses endpoint returns a raw list, not a paginated response."""
+        doc_id = "aaaa-bbbb-cccc-0001"
+        raw_accesses = [
+            {"id": "a1", "user": {"id": "u1", "email": "a@b.fr"}, "role": "owner", "team": ""},
+            {"id": "a2", "user": {"id": "u2", "email": "c@d.fr"}, "role": "editor", "team": ""},
+        ]
+        respx.get(f"{API}/documents/{doc_id}/accesses/").mock(
+            return_value=Response(200, json=raw_accesses)
+        )
+        accesses = await docs_client_session.list_accesses(doc_id)
+        assert isinstance(accesses, list)
+        assert len(accesses) == 2
+        assert accesses[0].role == "owner"
+
+
 class TestUpdateDocumentTitle:
     @respx.mock
     async def test_update_title(self, docs_client_session: DocsClient) -> None:

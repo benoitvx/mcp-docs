@@ -29,12 +29,8 @@ SAMPLE_ACCESS = {
     "team": None,
 }
 
-SAMPLE_ACCESSES = {
-    "count": 1,
-    "next": None,
-    "previous": None,
-    "results": [SAMPLE_ACCESS],
-}
+# Accesses endpoint returns a raw list (not paginated)
+SAMPLE_ACCESSES = [SAMPLE_ACCESS]
 
 SAMPLE_INVITATION = {
     "id": "inv-001",

@@ -77,8 +77,11 @@ class DocsClient:
         self._max_retries = config.max_retries
         self._semaphore = asyncio.Semaphore(config.max_concurrent)
 
-    async def _get(self, url: str, **kwargs: Any) -> dict:
-        """Execute a GET request with retry and concurrency limiting."""
+    async def _get(self, url: str, **kwargs: Any) -> Any:
+        """Execute a GET request with retry and concurrency limiting.
+
+        Returns parsed JSON (may be dict or list depending on endpoint).
+        """
         async with self._semaphore:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception(_is_retryable),
@@ -89,22 +92,22 @@ class DocsClient:
                 with attempt:
                     resp = await self._client.get(url, **kwargs)
                     _raise_for_api_status(resp)
-                    return resp.json()  # type: ignore[no-any-return]
+                    return resp.json()
         raise RuntimeError("Unreachable")  # pragma: no cover
 
-    async def _post(self, url: str, **kwargs: Any) -> dict:
+    async def _post(self, url: str, **kwargs: Any) -> Any:
         """Execute a POST request with concurrency limiting (no retry)."""
         async with self._semaphore:
             resp = await self._client.post(url, **kwargs)
             _raise_for_api_status(resp)
-            return resp.json()  # type: ignore[no-any-return]
+            return resp.json()
 
-    async def _patch(self, url: str, **kwargs: Any) -> dict:
+    async def _patch(self, url: str, **kwargs: Any) -> Any:
         """Execute a PATCH request with concurrency limiting (no retry)."""
         async with self._semaphore:
             resp = await self._client.patch(url, **kwargs)
             _raise_for_api_status(resp)
-            return resp.json()  # type: ignore[no-any-return]
+            return resp.json()
 
     async def _delete(self, url: str, **kwargs: Any) -> None:
         """Execute a DELETE request with concurrency limiting (no retry)."""
@@ -223,21 +226,22 @@ class DocsClient:
         )
         return PaginatedResponse[DocumentSummary].model_validate(data)
 
+    async def delete_document(self, document_id: str) -> None:
+        """Delete a document (soft delete, moved to trashbin)."""
+        await self._delete(
+            f"{_API_PREFIX}/documents/{document_id}/",
+            headers=self._make_csrf_headers(),
+        )
+
     # --- Access management ---
 
-    async def list_accesses(
-        self,
-        document_id: str,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> PaginatedResponse[DocumentAccess]:
-        """List all access entries for a document."""
-        params: dict[str, str | int] = {"page": page, "page_size": page_size}
-        data = await self._get(
-            f"{_API_PREFIX}/documents/{document_id}/accesses/",
-            params=params,
-        )
-        return PaginatedResponse[DocumentAccess].model_validate(data)
+    async def list_accesses(self, document_id: str) -> list[DocumentAccess]:
+        """List all access entries for a document.
+
+        The API returns a raw (non-paginated) list.
+        """
+        data = await self._get(f"{_API_PREFIX}/documents/{document_id}/accesses/")
+        return [DocumentAccess.model_validate(item) for item in data]
 
     async def grant_access(
         self,

@@ -134,6 +134,29 @@ async def docs_create_document(
 @mcp.tool(
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
 )
+async def docs_delete_document(
+    ctx: Context,
+    document_id: str,
+) -> str:
+    """Delete a document (soft delete — moved to trashbin).
+
+    Args:
+        document_id: UUID of the document to delete.
+    """
+    if not document_id or not document_id.strip():
+        return "Error: document_id is required."
+
+    try:
+        await _get_client(ctx).delete_document(document_id)
+    except DocsAPIError as e:
+        return _error_response(e)
+
+    return json.dumps({"status": "deleted", "document_id": document_id}, ensure_ascii=False)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+)
 async def docs_update_document_title(
     ctx: Context,
     document_id: str,

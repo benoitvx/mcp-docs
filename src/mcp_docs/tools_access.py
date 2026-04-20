@@ -43,35 +43,25 @@ def _error_response(err: DocsAPIError) -> str:
 async def docs_list_accesses(
     ctx: Context,
     document_id: str,
-    page: int = 1,
-    page_size: int = 20,
 ) -> str:
     """List all users who have access to a document and their roles.
 
     Args:
         document_id: UUID of the document.
-        page: Page number (starts at 1).
-        page_size: Number of results per page (1-100).
     """
     if not document_id or not document_id.strip():
         return "Error: document_id is required."
-    if page < 1:
-        return "Error: page must be >= 1."
-    if not 1 <= page_size <= 100:
-        return "Error: page_size must be between 1 and 100."
 
     try:
-        data = await _get_client(ctx).list_accesses(document_id, page=page, page_size=page_size)
+        accesses = await _get_client(ctx).list_accesses(document_id)
     except DocsAPIError as e:
         return _error_response(e)
 
     summary = {
-        "count": data.count,
-        "page": page,
-        "page_size": page_size,
+        "count": len(accesses),
         "accesses": [
             {"id": a.id, "user": a.user, "role": a.role, "team": a.team}
-            for a in data.results
+            for a in accesses
         ],
     }
     return json.dumps(summary, ensure_ascii=False)

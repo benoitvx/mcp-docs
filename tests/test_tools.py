@@ -11,6 +11,7 @@ from mcp_docs.app import AppContext
 from mcp_docs.client import DocsClient
 from mcp_docs.tools import (
     docs_create_document,
+    docs_delete_document,
     docs_get_document_content,
     docs_get_me,
     docs_list_children,
@@ -137,6 +138,30 @@ class TestCreateDocumentTool:
 
     async def test_empty_content(self, ctx: MagicMock) -> None:
         result = await docs_create_document(ctx=ctx, title="Title", markdown_content="")
+        assert "Error" in result
+
+
+# --- docs_delete_document ---
+
+
+class TestDeleteDocumentTool:
+    @respx.mock
+    async def test_success(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        result = await docs_delete_document(ctx=ctx, document_id=doc_id)
+        data = json.loads(result)
+        assert data["status"] == "deleted"
+        assert data["document_id"] == doc_id
+
+    @respx.mock
+    async def test_not_found(self, ctx: MagicMock) -> None:
+        respx.delete(f"{API}/documents/missing/").mock(return_value=Response(404))
+        result = await docs_delete_document(ctx=ctx, document_id="missing")
+        assert "not found" in result.lower()
+
+    async def test_empty_id(self, ctx: MagicMock) -> None:
+        result = await docs_delete_document(ctx=ctx, document_id="")
         assert "Error" in result
 
 
