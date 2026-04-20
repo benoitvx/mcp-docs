@@ -4,8 +4,6 @@ Serveur **MCP (Model Context Protocol)** pour l'API [Docs](https://docs.numeriqu
 
 Il expose **25 tools** et 2 resources permettant à un agent IA d'interagir avec les documents Docs : lire, créer, mettre à jour le contenu (markdown), gérer les accès et les invitations, organiser l'arborescence, utiliser les fonctions IA natives de Docs (résumé, correction, traduction), et plus encore.
 
-Ce projet fait partie de la **Data Platform** (brique données & MCP du socle IA interministériel, département IAE de la DINUM).
-
 ---
 
 ## Table des matières
