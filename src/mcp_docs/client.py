@@ -185,14 +185,30 @@ class DocsClient:
         document_id: str,
         title: str,
     ) -> DocumentSummary:
-        """Update a document's title (PATCH JSON).
-
-        Note: updating document content requires Yjs-encoded bytes and is not
-        supported here. Only the title can be changed via this endpoint.
-        """
+        """Update a document's title (PATCH JSON)."""
         raw = await self._patch(
             f"{_API_PREFIX}/documents/{document_id}/",
             json={"title": title},
+            headers=self._make_csrf_headers(),
+        )
+        return DocumentSummary.model_validate(raw)
+
+    async def update_document_content(
+        self,
+        document_id: str,
+        text: str,
+    ) -> DocumentSummary:
+        """Replace a document's content with plain text (converted to Yjs).
+
+        Text is split on double newlines into separate paragraph blocks.
+        Markdown formatting is not preserved.
+        """
+        from mcp_docs.yjs_utils import text_to_yjs_base64
+
+        yjs_b64 = text_to_yjs_base64(text)
+        raw = await self._patch(
+            f"{_API_PREFIX}/documents/{document_id}/",
+            json={"content": yjs_b64, "websocket": True},
             headers=self._make_csrf_headers(),
         )
         return DocumentSummary.model_validate(raw)

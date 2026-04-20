@@ -17,6 +17,7 @@ from mcp_docs.tools import (
     docs_list_children,
     docs_list_documents,
     docs_search_documents,
+    docs_update_document_content,
     docs_update_document_title,
 )
 
@@ -193,6 +194,46 @@ class TestUpdateDocumentTitleTool:
     async def test_empty_title(self, ctx: MagicMock) -> None:
         result = await docs_update_document_title(ctx=ctx, document_id="abc", title="")
         assert "Error" in result
+
+
+# --- docs_update_document_content ---
+
+
+class TestUpdateDocumentContentTool:
+    @respx.mock
+    async def test_success(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        respx.patch(f"{API}/documents/{doc_id}/").mock(
+            return_value=Response(200, json={"id": doc_id, "title": "Doc"})
+        )
+        result = await docs_update_document_content(ctx=ctx, document_id=doc_id, text="new content")
+        data = json.loads(result)
+        assert data["id"] == doc_id
+        assert data["status"] == "updated"
+
+    @respx.mock
+    async def test_not_found(self, ctx: MagicMock) -> None:
+        respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        result = await docs_update_document_content(ctx=ctx, document_id="missing", text="x")
+        assert "not found" in result.lower()
+
+    async def test_empty_id(self, ctx: MagicMock) -> None:
+        result = await docs_update_document_content(ctx=ctx, document_id="", text="x")
+        assert "Error" in result
+
+    async def test_text_empty_string_allowed(self, ctx: MagicMock) -> None:
+        """Empty string should be allowed (clears the document)."""
+        import respx as _respx
+        from httpx import Response as _Response
+
+        doc_id = "abc"
+        with _respx.mock:
+            _respx.patch(f"{API}/documents/{doc_id}/").mock(
+                return_value=_Response(200, json={"id": doc_id, "title": "Doc"})
+            )
+            result = await docs_update_document_content(ctx=ctx, document_id=doc_id, text="")
+            data = json.loads(result)
+            assert data["status"] == "updated"
 
 
 # --- docs_search_documents ---

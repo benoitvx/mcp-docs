@@ -164,10 +164,6 @@ async def docs_update_document_title(
 ) -> str:
     """Update the title of an existing document.
 
-    Note: only the title can be updated. Updating document content is not
-    supported yet — it requires Yjs-encoded payloads that the API does not
-    accept in markdown form.
-
     Args:
         document_id: UUID of the document.
         title: New document title.
@@ -183,6 +179,38 @@ async def docs_update_document_title(
         return _error_response(e)
 
     return json.dumps({"id": data.id, "title": data.title}, ensure_ascii=False)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+)
+async def docs_update_document_content(
+    ctx: Context,
+    document_id: str,
+    text: str,
+) -> str:
+    """Replace the content of a document with plain text.
+
+    The text is converted to the internal Yjs/BlockNote format used by Docs.
+    Only plain text is supported — markdown formatting (headings, lists, bold,
+    etc.) will appear as literal characters, not as formatted elements.
+    Paragraphs are separated by double newlines.
+
+    Args:
+        document_id: UUID of the document.
+        text: New content as plain text.
+    """
+    if not document_id or not document_id.strip():
+        return "Error: document_id is required."
+    if text is None:
+        return "Error: text is required."
+
+    try:
+        data = await _get_client(ctx).update_document_content(document_id, text)
+    except DocsAPIError as e:
+        return _error_response(e)
+
+    return json.dumps({"id": data.id, "status": "updated"}, ensure_ascii=False)
 
 
 # --- P1 Tools ---

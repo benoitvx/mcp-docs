@@ -128,6 +128,34 @@ class TestCreateDocument:
 # --- search_documents ---
 
 
+class TestUpdateDocumentContent:
+    @respx.mock
+    async def test_update_content(self, docs_client_session: DocsClient) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        updated = {"id": doc_id, "title": "Doc"}
+        route = respx.patch(f"{API}/documents/{doc_id}/").mock(return_value=Response(200, json=updated))
+        result = await docs_client_session.update_document_content(doc_id, "new content")
+        assert result.id == doc_id
+        assert route.called
+        # Body should be JSON with content (base64) and websocket flag
+        body = route.calls[0].request.read()
+        import json as _json
+
+        payload = _json.loads(body)
+        assert "content" in payload
+        assert payload["websocket"] is True
+        assert isinstance(payload["content"], str)
+        assert len(payload["content"]) > 0
+        # CSRF headers set
+        assert "X-CSRFToken" in route.calls[0].request.headers
+
+    @respx.mock
+    async def test_update_content_404(self, docs_client_session: DocsClient) -> None:
+        respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        with pytest.raises(DocsNotFoundError):
+            await docs_client_session.update_document_content("missing", "x")
+
+
 class TestDeleteDocument:
     @respx.mock
     async def test_delete(self, docs_client_session: DocsClient) -> None:
