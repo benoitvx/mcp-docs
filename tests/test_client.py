@@ -128,6 +128,24 @@ class TestCreateDocument:
 # --- search_documents ---
 
 
+class TestUpdateDocumentTitle:
+    @respx.mock
+    async def test_update_title(self, docs_client_session: DocsClient) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        updated = {"id": doc_id, "title": "New Title"}
+        route = respx.patch(f"{API}/documents/{doc_id}/").mock(return_value=Response(200, json=updated))
+        result = await docs_client_session.update_document_title(doc_id, "New Title")
+        assert result.title == "New Title"
+        assert route.called
+        assert "X-CSRFToken" in route.calls[0].request.headers
+
+    @respx.mock
+    async def test_update_title_404(self, docs_client_session: DocsClient) -> None:
+        respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        with pytest.raises(DocsNotFoundError):
+            await docs_client_session.update_document_title("missing", "New")
+
+
 class TestSearchDocuments:
     @respx.mock
     async def test_search(self, docs_client_session: DocsClient) -> None:

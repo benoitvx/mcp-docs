@@ -177,6 +177,23 @@ class DocsClient:
         )
         return DocumentSummary.model_validate(raw)
 
+    async def update_document_title(
+        self,
+        document_id: str,
+        title: str,
+    ) -> DocumentSummary:
+        """Update a document's title (PATCH JSON).
+
+        Note: updating document content requires Yjs-encoded bytes and is not
+        supported here. Only the title can be changed via this endpoint.
+        """
+        raw = await self._patch(
+            f"{_API_PREFIX}/documents/{document_id}/",
+            json={"title": title},
+            headers=self._make_csrf_headers(),
+        )
+        return DocumentSummary.model_validate(raw)
+
     async def search_documents(
         self,
         query: str,

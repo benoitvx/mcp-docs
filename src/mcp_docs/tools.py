@@ -131,6 +131,37 @@ async def docs_create_document(
     return json.dumps({"id": data.id, "title": data.title or title}, ensure_ascii=False)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+)
+async def docs_update_document_title(
+    ctx: Context,
+    document_id: str,
+    title: str,
+) -> str:
+    """Update the title of an existing document.
+
+    Note: only the title can be updated. Updating document content is not
+    supported yet — it requires Yjs-encoded payloads that the API does not
+    accept in markdown form.
+
+    Args:
+        document_id: UUID of the document.
+        title: New document title.
+    """
+    if not document_id or not document_id.strip():
+        return "Error: document_id is required."
+    if not title or not title.strip():
+        return "Error: title is required."
+
+    try:
+        data = await _get_client(ctx).update_document_title(document_id, title)
+    except DocsAPIError as e:
+        return _error_response(e)
+
+    return json.dumps({"id": data.id, "title": data.title}, ensure_ascii=False)
+
+
 # --- P1 Tools ---
 
 

@@ -16,6 +16,7 @@ from mcp_docs.tools import (
     docs_list_children,
     docs_list_documents,
     docs_search_documents,
+    docs_update_document_title,
 )
 
 from .conftest import (
@@ -136,6 +137,36 @@ class TestCreateDocumentTool:
 
     async def test_empty_content(self, ctx: MagicMock) -> None:
         result = await docs_create_document(ctx=ctx, title="Title", markdown_content="")
+        assert "Error" in result
+
+
+# --- docs_update_document_title ---
+
+
+class TestUpdateDocumentTitleTool:
+    @respx.mock
+    async def test_success(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        respx.patch(f"{API}/documents/{doc_id}/").mock(
+            return_value=Response(200, json={"id": doc_id, "title": "New Title"})
+        )
+        result = await docs_update_document_title(ctx=ctx, document_id=doc_id, title="New Title")
+        data = json.loads(result)
+        assert data["id"] == doc_id
+        assert data["title"] == "New Title"
+
+    @respx.mock
+    async def test_not_found(self, ctx: MagicMock) -> None:
+        respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        result = await docs_update_document_title(ctx=ctx, document_id="missing", title="X")
+        assert "not found" in result.lower()
+
+    async def test_empty_id(self, ctx: MagicMock) -> None:
+        result = await docs_update_document_title(ctx=ctx, document_id="", title="X")
+        assert "Error" in result
+
+    async def test_empty_title(self, ctx: MagicMock) -> None:
+        result = await docs_update_document_title(ctx=ctx, document_id="abc", title="")
         assert "Error" in result
 
 
