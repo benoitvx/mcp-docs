@@ -187,26 +187,25 @@ async def docs_update_document_title(
 async def docs_update_document_content(
     ctx: Context,
     document_id: str,
-    text: str,
+    content: str,
 ) -> str:
-    """Replace the content of a document with plain text.
+    """Replace the content of a document with markdown.
 
-    The text is converted to the internal Yjs/BlockNote format used by Docs.
-    Only plain text is supported — markdown formatting (headings, lists, bold,
-    etc.) will appear as literal characters, not as formatted elements.
-    Paragraphs are separated by double newlines.
+    Markdown formatting is preserved: headings (# ##), bold (**text**),
+    italic (*text*), bullet and numbered lists, blockquotes, code blocks,
+    links, etc. Conversion is performed server-side.
 
     Args:
         document_id: UUID of the document.
-        text: New content as plain text.
+        content: New content as markdown.
     """
     if not document_id or not document_id.strip():
         return "Error: document_id is required."
-    if text is None:
-        return "Error: text is required."
+    if not content or not content.strip():
+        return "Error: content is required."
 
     try:
-        data = await _get_client(ctx).update_document_content(document_id, text)
+        data = await _get_client(ctx).update_document_content(document_id, content)
     except DocsAPIError as e:
         return _error_response(e)
 

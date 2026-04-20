@@ -193,19 +193,39 @@ class DocsClient:
         )
         return DocumentSummary.model_validate(raw)
 
+    async def _markdown_to_yjs_base64(self, markdown: str) -> str:
+        """Convert markdown to base64-encoded Yjs via the backend's own converter.
+
+        The backend runs a Y-Provider service that converts markdown to the
+        BlockNote/Yjs format on document creation. We exploit this by creating
+        a temporary document with the markdown, copying its generated content,
+        then deleting the temp document.
+        """
+        temp = await self.create_document(markdown, title="_mcp_temp_convert")
+        temp_id = temp.id
+        try:
+            data = await self._get(f"{_API_PREFIX}/documents/{temp_id}/")
+            content = data.get("content")
+            if not content:
+                raise DocsAPIError(500, "Temp doc returned empty content field")
+            return content
+        finally:
+            try:
+                await self.delete_document(temp_id)
+            except DocsAPIError:
+                pass  # best-effort cleanup
+
     async def update_document_content(
         self,
         document_id: str,
-        text: str,
+        content: str,
     ) -> DocumentSummary:
-        """Replace a document's content with plain text (converted to Yjs).
+        """Replace a document's content with markdown.
 
-        Text is split on double newlines into separate paragraph blocks.
-        Markdown formatting is not preserved.
+        Markdown formatting is preserved (headings, bold, italic, lists, etc.)
+        via the backend's Y-Provider conversion service.
         """
-        from mcp_docs.yjs_utils import text_to_yjs_base64
-
-        yjs_b64 = text_to_yjs_base64(text)
+        yjs_b64 = await self._markdown_to_yjs_base64(content)
         raw = await self._patch(
             f"{_API_PREFIX}/documents/{document_id}/",
             json={"content": yjs_b64, "websocket": True},

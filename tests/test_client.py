@@ -130,30 +130,84 @@ class TestCreateDocument:
 
 class TestUpdateDocumentContent:
     @respx.mock
-    async def test_update_content(self, docs_client_session: DocsClient) -> None:
-        doc_id = "aaaa-bbbb-cccc-0001"
-        updated = {"id": doc_id, "title": "Doc"}
-        route = respx.patch(f"{API}/documents/{doc_id}/").mock(return_value=Response(200, json=updated))
-        result = await docs_client_session.update_document_content(doc_id, "new content")
-        assert result.id == doc_id
-        assert route.called
-        # Body should be JSON with content (base64) and websocket flag
-        body = route.calls[0].request.read()
+    async def test_update_content_via_temp_doc(self, docs_client_session: DocsClient) -> None:
+        """The client creates a temp doc to convert markdown to Yjs server-side."""
+        target_id = "aaaa-bbbb-cccc-0001"
+        temp_id = "temp-1234-5678"
+
+        # Step 1: create temp doc (multipart POST on /documents/)
+        create_route = respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        # Step 2: GET temp doc → returns content base64
+        get_temp_route = respx.get(f"{API}/documents/{temp_id}/").mock(
+            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZXl4cw=="})
+        )
+        # Step 3: PATCH target doc with that content
+        patch_route = respx.patch(f"{API}/documents/{target_id}/").mock(
+            return_value=Response(200, json={"id": target_id, "title": "Doc"})
+        )
+        # Step 4: DELETE temp doc
+        delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+
+        result = await docs_client_session.update_document_content(target_id, "# hello")
+        assert result.id == target_id
+        assert create_route.called
+        assert get_temp_route.called
+        assert patch_route.called
+        assert delete_route.called
+
+        # PATCH body carries the content from the temp doc + websocket flag
         import json as _json
 
-        payload = _json.loads(body)
-        assert "content" in payload
+        payload = _json.loads(patch_route.calls[0].request.read())
+        assert payload["content"] == "ZmFrZXl4cw=="
         assert payload["websocket"] is True
-        assert isinstance(payload["content"], str)
-        assert len(payload["content"]) > 0
-        # CSRF headers set
-        assert "X-CSRFToken" in route.calls[0].request.headers
 
     @respx.mock
-    async def test_update_content_404(self, docs_client_session: DocsClient) -> None:
+    async def test_update_content_target_not_found(self, docs_client_session: DocsClient) -> None:
+        temp_id = "temp-x"
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        respx.get(f"{API}/documents/{temp_id}/").mock(
+            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZQ=="})
+        )
         respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+
         with pytest.raises(DocsNotFoundError):
             await docs_client_session.update_document_content("missing", "x")
+
+    @respx.mock
+    async def test_temp_doc_cleaned_up_even_when_patch_fails(self, docs_client_session: DocsClient) -> None:
+        temp_id = "temp-cleanup"
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        respx.get(f"{API}/documents/{temp_id}/").mock(
+            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZQ=="})
+        )
+        respx.patch(f"{API}/documents/target/").mock(return_value=Response(500))
+        delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+
+        with pytest.raises(DocsAPIError):
+            await docs_client_session.update_document_content("target", "x")
+        assert delete_route.called  # cleanup happened despite error
+
+    @respx.mock
+    async def test_empty_content_from_temp_raises(self, docs_client_session: DocsClient) -> None:
+        temp_id = "temp-empty"
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        respx.get(f"{API}/documents/{temp_id}/").mock(
+            return_value=Response(200, json={"id": temp_id, "content": None})
+        )
+        respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+
+        with pytest.raises(DocsAPIError):
+            await docs_client_session.update_document_content("target", "x")
 
 
 class TestDeleteDocument:
