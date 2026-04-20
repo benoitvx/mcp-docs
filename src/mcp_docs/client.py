@@ -51,7 +51,7 @@ def _raise_for_api_status(resp: httpx.Response) -> None:
     exc_cls = _STATUS_MAP.get(status, DocsAPIError)
     if exc_cls is DocsAPIError:
         raise DocsAPIError(status, f"API request failed (HTTP {status})")
-    raise exc_cls()  # type: ignore[call-arg]  # subclasses define default message
+    raise exc_cls()  # pyright: ignore[reportCallIssue]  # subclasses define default message
 
 
 class DocsClient:
