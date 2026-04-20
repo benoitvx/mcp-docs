@@ -99,7 +99,7 @@ async def docs_get_document_content(
         return _error_response(e)
 
     if content_format == "markdown":
-        return f"# {data.title}\n\n{data.content}" if data.title else data.content
+        return f"# {data.title}\n\n{data.content or ''}" if data.title else (data.content or "")
 
     return data.model_dump_json()
 

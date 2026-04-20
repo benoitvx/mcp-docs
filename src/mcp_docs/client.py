@@ -109,6 +109,13 @@ class DocsClient:
             _raise_for_api_status(resp)
             return resp.json()
 
+    async def _put(self, url: str, **kwargs: Any) -> Any:
+        """Execute a PUT request with concurrency limiting (no retry)."""
+        async with self._semaphore:
+            resp = await self._client.put(url, **kwargs)
+            _raise_for_api_status(resp)
+            return resp.json()
+
     async def _delete(self, url: str, **kwargs: Any) -> None:
         """Execute a DELETE request with concurrency limiting (no retry)."""
         async with self._semaphore:
@@ -347,6 +354,118 @@ class DocsClient:
             headers=self._make_csrf_headers(),
         )
         return Invitation.model_validate(raw)
+
+    # --- AI operations ---
+
+    async def ai_transform(self, document_id: str, text: str, action: str) -> str:
+        """Apply an AI transformation to text, scoped to a document."""
+        raw = await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/ai-transform/",
+            json={"text": text, "action": action},
+            headers=self._make_csrf_headers(),
+        )
+        return raw["answer"] if "answer" in raw else raw.get("transformed_text", "")
+
+    async def ai_translate(self, document_id: str, text: str, language: str) -> str:
+        """Translate text into the given language, scoped to a document."""
+        raw = await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/ai-translate/",
+            json={"text": text, "language": language},
+            headers=self._make_csrf_headers(),
+        )
+        return raw["answer"] if "answer" in raw else raw.get("translated_text", "")
+
+    # --- Link configuration ---
+
+    async def update_link_configuration(
+        self,
+        document_id: str,
+        link_reach: str,
+        link_role: str | None,
+    ) -> dict:
+        """Configure the share-link reach and role for a document."""
+        payload: dict[str, str | None] = {"link_reach": link_reach, "link_role": link_role}
+        raw = await self._put(
+            f"{_API_PREFIX}/documents/{document_id}/link-configuration/",
+            json=payload,
+            headers=self._make_csrf_headers(),
+        )
+        return raw  # type: ignore[no-any-return]
+
+    # --- Favorites ---
+
+    async def list_favorites(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedResponse[DocumentSummary]:
+        """List the user's favorite documents."""
+        params: dict[str, str | int] = {"page": page, "page_size": page_size}
+        data = await self._get(f"{_API_PREFIX}/documents/favorite_list/", params=params)
+        return PaginatedResponse[DocumentSummary].model_validate(data)
+
+    async def add_favorite(self, document_id: str) -> None:
+        """Mark a document as favorite."""
+        await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/favorite/",
+            headers=self._make_csrf_headers(),
+        )
+
+    async def remove_favorite(self, document_id: str) -> None:
+        """Remove a document from favorites."""
+        await self._delete(
+            f"{_API_PREFIX}/documents/{document_id}/favorite/",
+            headers=self._make_csrf_headers(),
+        )
+
+    # --- Trashbin & restore ---
+
+    async def list_trashbin(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedResponse[DocumentSummary]:
+        """List documents in the trashbin (soft-deleted, within retention)."""
+        params: dict[str, str | int] = {"page": page, "page_size": page_size}
+        data = await self._get(f"{_API_PREFIX}/documents/trashbin/", params=params)
+        return PaginatedResponse[DocumentSummary].model_validate(data)
+
+    async def restore_document(self, document_id: str) -> None:
+        """Restore a soft-deleted document from the trashbin."""
+        await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/restore/",
+            headers=self._make_csrf_headers(),
+        )
+
+    # --- Move & duplicate ---
+
+    async def move_document(
+        self,
+        document_id: str,
+        target_document_id: str,
+        position: str,
+    ) -> dict:
+        """Move a document in the hierarchy."""
+        raw = await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/move/",
+            json={"target_document_id": target_document_id, "position": position},
+            headers=self._make_csrf_headers(),
+        )
+        return raw  # type: ignore[no-any-return]
+
+    async def duplicate_document(
+        self,
+        document_id: str,
+        with_descendants: bool = False,
+        with_accesses: bool = False,
+    ) -> dict:
+        """Duplicate a document (optionally its subtree and access permissions)."""
+        raw = await self._post(
+            f"{_API_PREFIX}/documents/{document_id}/duplicate/",
+            json={"with_descendants": with_descendants, "with_accesses": with_accesses},
+            headers=self._make_csrf_headers(),
+        )
+        return raw  # type: ignore[no-any-return]
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

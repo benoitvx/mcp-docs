@@ -7,6 +7,9 @@ import sys
 import mcp_docs.resources  # noqa: F401 — registers resources via decorators
 import mcp_docs.tools  # noqa: F401 — registers tools via decorators
 import mcp_docs.tools_access  # noqa: F401 — registers access/permission tools
+import mcp_docs.tools_ai  # noqa: F401 — registers AI tools
+import mcp_docs.tools_organize  # noqa: F401 — registers move/duplicate/trashbin tools
+import mcp_docs.tools_sharing  # noqa: F401 — registers link config/favorites tools
 from mcp_docs.app import mcp
 
 

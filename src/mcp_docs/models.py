@@ -9,7 +9,7 @@ class DocumentSummary(BaseModel):
     """Lightweight document representation returned by list endpoints."""
 
     id: str
-    title: str = ""
+    title: str | None = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -18,8 +18,8 @@ class DocumentContent(BaseModel):
     """Full document content returned by the content endpoint."""
 
     id: str
-    title: str = ""
-    content: str = ""
+    title: str | None = ""
+    content: str | None = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
