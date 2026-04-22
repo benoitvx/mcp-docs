@@ -166,26 +166,57 @@ Le mode `oidc` est prévu pour la migration vers `/external_api/v1.0/` avec Bear
 
 ## Utilisation avec Claude Desktop
 
-Ajouter dans `claude_desktop_config.json` (macOS : `~/Library/Application Support/Claude/claude_desktop_config.json`) :
+Config à ajouter dans `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) :
 
 ```json
 {
   "mcpServers": {
     "docs": {
-      "command": "uv",
-      "args": ["run", "--directory", "/chemin/vers/mcp-docs", "mcp-docs"],
+      "command": "/ABSOLUTE/PATH/TO/uv",
+      "args": ["run", "--directory", "/ABSOLUTE/PATH/TO/mcp-docs", "mcp-docs"],
       "env": {
         "DOCS_BASE_URL": "https://docs.numerique.gouv.fr",
-        "DOCS_AUTH_MODE": "session"
+        "DOCS_AUTH_MODE": "session",
+        "UV_PROJECT_ENVIRONMENT": "/tmp/venv-mcp-docs",
+        "UV_LINK_MODE": "copy"
       }
     }
   }
 }
 ```
 
-Le cookie n'apparaît **pas** dans la config — il est lu depuis `~/.local/state/mcp-docs/session.json`, alimenté par `mcp-docs-refresh-session` (voir [Configuration](#configuration)). Si tu préfères malgré tout l'injecter en env, ajoute `"DOCS_SESSION_COOKIE": "..."` (mais tu perds la rotation automatique et le cookie finit écrit dans ce fichier de config).
+**Pourquoi pas `"command": "uv"`** : Claude Desktop est une GUI app macOS, elle n'hérite pas du `PATH` du shell (contrairement à Claude Code lancé depuis un terminal). `uv` doit être référencé par chemin absolu. Récupère-le via `which uv` (souvent `/opt/homebrew/bin/uv`, `/Users/<toi>/.local/bin/uv`, ou `/usr/local/bin/uv`).
 
-Redémarrer Claude Desktop. Le serveur expose alors les 25 tools MCP.
+**Pourquoi les variables UV** : si le repo est dans iCloud Drive (`~/Dev` en symlink), un `.venv` local peut partir en deadlock sur hardlinks. `UV_PROJECT_ENVIRONMENT=/tmp/venv-mcp-docs` déplace le venv hors iCloud, `UV_LINK_MODE=copy` évite les hardlinks. Si ton repo n'est **pas** dans iCloud, ces deux variables peuvent être retirées.
+
+**Pas de `DOCS_SESSION_COOKIE`** : le cookie est lu depuis `~/.local/state/mcp-docs/session.json`, alimenté par `mcp-docs-refresh-session` (voir [Configuration](#configuration)). Si tu préfères malgré tout l'injecter en env, ajoute `"DOCS_SESSION_COOKIE": "..."` (mais tu perds la rotation automatique et le cookie finit écrit en clair dans ce fichier de config).
+
+**Merge propre** si tu as déjà d'autres MCP servers configurés (préserve les autres entrées de `mcpServers`) :
+
+```bash
+CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+mkdir -p "$(dirname "$CONFIG")"
+[ -f "$CONFIG" ] || echo '{}' > "$CONFIG"
+jq --arg uv "$(which uv)" --arg dir "$(pwd)" '.mcpServers.docs = {
+  command: $uv,
+  args: ["run", "--directory", $dir, "mcp-docs"],
+  env: {
+    DOCS_BASE_URL: "https://docs.numerique.gouv.fr",
+    DOCS_AUTH_MODE: "session",
+    UV_PROJECT_ENVIRONMENT: "/tmp/venv-mcp-docs",
+    UV_LINK_MODE: "copy"
+  }
+}' "$CONFIG" > "$CONFIG.new" && mv "$CONFIG.new" "$CONFIG"
+python3 -m json.tool "$CONFIG" > /dev/null && echo "JSON OK"
+```
+
+Puis redémarrer Claude Desktop proprement (pas seulement fermer la fenêtre) :
+
+```bash
+osascript -e 'quit app "Claude"' && sleep 2 && open -a Claude
+```
+
+Claude Desktop expose alors les 25 tools MCP. En cas d'échec : `tail -n 50 ~/Library/Logs/Claude/mcp-server-docs.log`.
 
 ---
 
