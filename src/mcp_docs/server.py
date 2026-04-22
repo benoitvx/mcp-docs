@@ -16,10 +16,10 @@ from mcp_docs.app import mcp
 async def _config_check() -> None:
     """Validate configuration and test API connectivity."""
     from mcp_docs.client import DocsClient
-    from mcp_docs.config import DocsConfig
+    from mcp_docs.config import load_config
 
     try:
-        config = DocsConfig()
+        config = load_config()
     except Exception as e:
         print(f"Config error: {e}", file=sys.stderr)
         sys.exit(1)

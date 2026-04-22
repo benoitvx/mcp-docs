@@ -42,10 +42,20 @@
 - [x] `docs_list_trashbin`, `docs_restore_document`
 
 ### Qualité & CI
-- [x] 161 tests (lint + pyright + pytest + pip-audit + gitleaks en CI)
+- [x] 175 tests (lint + pyright + pytest + pip-audit + gitleaks en CI)
 - [x] Fix CVE-2026-40347 (python-multipart bumped à 0.0.26)
 - [x] README complet avec les 25 tools, 4 workflows, architecture, sécurité ANSSI
 - [x] Évaluations MCP — `evaluation.xml` avec 10 Q&A pairs (placeholders à remplir)
+
+### Cookie session — rotation automatisée (avril 2026)
+- [x] Module `paths.py` — résolution XDG (`~/.local/state/mcp-docs/session.json`, profil Chromium sous `~/.local/share/mcp-docs/browser-profile/`)
+- [x] `load_config()` + `read_session_file()` dans `config.py` — précédence `DOCS_SESSION_COOKIE` > `DOCS_SESSION_FILE` > défaut XDG, `model_validator` reste pur
+- [x] CLI `mcp-docs-refresh-session` — fast-path HTTP (probe `/users/me/`) + fallback Playwright avec profil persistant, écriture atomique `0600`
+- [x] Flag `--headless` + notification macOS `osascript` sur échec (runs planifiés)
+- [x] Extra optionnel `[browser]` pour Playwright (pas imposé aux autres users)
+- [x] 14 nouveaux tests (`tests/test_session_file.py`) — parsing + précédence
+- [x] Plist launchd horaire documenté dans README, activable en 3 commandes `launchctl`
+- [x] README « Rotation des secrets » mis à jour, bloc Claude Desktop nettoyé (plus de cookie en dur)
 
 ---
 
@@ -84,4 +94,5 @@ Bloqué : attendre le token exchange côté La Suite (@jmaupetit).
 
 - **Markdown update sans pycrdt** : on exploite le convertisseur backend en créant un doc temporaire, en récupérant son Yjs pré-converti, et en le transplantant sur le doc cible. Pas de parser markdown → BlockNote côté client nécessaire. Coût : 4 appels API par update au lieu d'1.
 - **Auth session + CSRF** : hack temporaire. Le CSRF token est généré côté client (64 chars hex via `secrets.token_hex(32)`), injecté en cookie + header `X-CSRFToken` + `Referer`. Partira avec la migration OIDC.
+- **Rotation cookie via Playwright** : palier intermédiaire en attendant l'OIDC. Évite le DataPass ProConnect (4 rôles + 5j ouvrés) trop lourd pour un outil mono-utilisateur. Profil Chromium persistant → la session ProConnect IdP est réutilisée → refresh silencieux dans 99% des cas. Notifications macOS quand la re-MFA est requise.
 - **Tools non-idempotents marqués destructive=True** : delete, revoke_access, update_access, remove_favorite, move, update_link_configuration.

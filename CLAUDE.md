@@ -288,12 +288,25 @@ DOCS_BASE_URL=https://docs.numerique.gouv.fr
 # Auth mode: "session" (cookie) ou "oidc" (resource server)
 DOCS_AUTH_MODE=session
 
-# Pour auth session (POC)
+# Pour auth session (POC) — valeur explicite OU chemin d'un fichier JSON
 DOCS_SESSION_COOKIE=<docs_sessionid value>
+DOCS_SESSION_FILE=/chemin/vers/session.json  # défaut: ~/.local/state/mcp-docs/session.json
 
 # Pour auth OIDC (cible)
 DOCS_OIDC_TOKEN=<bearer token>
 ```
+
+**Rafraîchir le cookie automatiquement** (mode session) :
+
+```bash
+uv sync --extra browser
+uv run playwright install chromium
+uv run mcp-docs-refresh-session
+```
+
+Le CLI `mcp-docs-refresh-session` lance un Chromium persistant, attend la connexion ProConnect, puis écrit le cookie dans `DOCS_SESSION_FILE` (ou le chemin XDG par défaut). Les runs suivants utilisent un fast-path (probe HTTP sur `/users/me/`, pas de navigateur) si le cookie est encore valide. Précédence : `DOCS_SESSION_COOKIE` > `DOCS_SESSION_FILE` > défaut XDG.
+
+**Automation (macOS)** : la commande accepte `--headless` pour un rafraîchissement sans fenêtre, destiné à un job planifié. Un plist launchd horaire (documenté dans le README section « Rafraîchissement automatique ») fait tourner ça en arrière-plan ; si la re-authentification ProConnect devient nécessaire, une notification macOS native prévient l'utilisateur de relancer en interactif. Logs : `/tmp/mcp-docs-refresh.err.log`.
 
 ---
 

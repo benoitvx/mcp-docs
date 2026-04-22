@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from mcp.server.fastmcp import FastMCP
 
 from mcp_docs.client import DocsClient
-from mcp_docs.config import DocsConfig
+from mcp_docs.config import DocsConfig, load_config
 
 
 @dataclass
@@ -21,7 +21,7 @@ class AppContext:
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     """Manage DocsClient lifecycle."""
-    config = DocsConfig()
+    config = load_config()
     client = DocsClient(config)
     try:
         yield AppContext(config=config, client=client)

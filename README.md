@@ -47,20 +47,116 @@ Le serveur est configuré par variables d'environnement, préfixées `DOCS_`.
 |----------|-------------|--------|
 | `DOCS_BASE_URL` | URL de base de l'API Docs | `https://docs.numerique.gouv.fr` |
 | `DOCS_AUTH_MODE` | `session` (cookie) ou `oidc` (Bearer token) | `session` |
-| `DOCS_SESSION_COOKIE` | Cookie `docs_sessionid` (mode session) | — |
+| `DOCS_SESSION_COOKIE` | Cookie `docs_sessionid` (mode session, explicite) | — |
+| `DOCS_SESSION_FILE` | Chemin JSON contenant le cookie (mode session, alternative) | `$XDG_STATE_HOME/mcp-docs/session.json` |
 | `DOCS_OIDC_TOKEN` | Bearer token OIDC (mode oidc) | — |
 | `DOCS_MAX_RETRIES` | Nombre de retries sur erreurs transitoires | `3` |
 | `DOCS_MAX_CONCURRENT` | Limite de requêtes concurrentes | `5` |
 
 ### Récupérer le cookie de session
 
-Le mode `session` est le mode par défaut. Il utilise le cookie `docs_sessionid` obtenu après connexion ProConnect.
+Le mode `session` est le mode par défaut. Il utilise le cookie `docs_sessionid` obtenu après connexion ProConnect. Deux options :
+
+#### Option A — Automatique via Playwright (recommandé)
+
+Un CLI dédié lance un navigateur, attend que vous complétiez la connexion ProConnect, puis écrit le cookie dans un fichier local lu automatiquement par le MCP :
+
+```bash
+# Installation (une seule fois)
+uv sync --extra browser
+uv run playwright install chromium
+
+# Rafraîchir le cookie (aucun argument requis)
+uv run mcp-docs-refresh-session
+```
+
+Au premier lancement, un Chromium s'ouvre — terminez la connexion ProConnect dans la fenêtre. Le cookie est écrit dans `~/.local/state/mcp-docs/session.json` (permissions `0600`) et le MCP le lit au démarrage.
+
+Les lancements suivants vérifient d'abord si le cookie existant est encore valide (≈ 200 ms, aucun navigateur lancé). Si oui, on sort immédiatement. Sinon, le flow Playwright redémarre — et comme un profil navigateur persistant est conservé sous `~/.local/share/mcp-docs/browser-profile/`, la session ProConnect est souvent déjà connue, donc la récupération est quasi-instantanée.
+
+Override du chemin : `DOCS_SESSION_FILE=/autre/chemin.json uv run mcp-docs-refresh-session`.
+Timeout configurable : `uv run mcp-docs-refresh-session --timeout 600`.
+
+#### Rafraîchissement automatique (launchd, macOS)
+
+Pour ne plus jamais avoir à lancer la commande manuellement, planifier un run horaire en arrière-plan avec `launchd`. Le flag `--headless` fait tourner Chromium sans fenêtre ; si la session ProConnect IdP est encore vivante dans le profil persistant, le refresh est invisible. Si elle a expiré, le job échoue et une notification macOS s'affiche pour te signaler qu'il faut relancer en interactif.
+
+Récupérer le chemin absolu de `uv` :
+
+```bash
+which uv      # ex: /opt/homebrew/bin/uv
+```
+
+Créer `~/Library/LaunchAgents/mcp-docs.refresh.plist` (adapter `PATH_TO_UV` et `PATH_TO_REPO`) :
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>mcp-docs.refresh</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>PATH_TO_UV</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>PATH_TO_REPO</string>
+        <string>mcp-docs-refresh-session</string>
+        <string>--headless</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>UV_PROJECT_ENVIRONMENT</key>
+        <string>/tmp/venv-mcp-docs</string>
+        <key>UV_LINK_MODE</key>
+        <string>copy</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/mcp-docs-refresh.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/mcp-docs-refresh.err.log</string>
+</dict>
+</plist>
+```
+
+Charger (ou recharger après une modification du plist) :
+
+```bash
+launchctl bootout gui/$(id -u)/mcp-docs.refresh 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/mcp-docs.refresh.plist
+launchctl kickstart -k gui/$(id -u)/mcp-docs.refresh   # déclenche immédiatement pour tester
+```
+
+Vérifier :
+
+```bash
+launchctl print gui/$(id -u)/mcp-docs.refresh | head
+tail -f /tmp/mcp-docs-refresh.err.log
+```
+
+Désactiver :
+
+```bash
+launchctl bootout gui/$(id -u)/mcp-docs.refresh
+rm ~/Library/LaunchAgents/mcp-docs.refresh.plist
+```
+
+#### Option B — Manuel via DevTools
+
+Si vous préférez ne pas installer Playwright :
 
 1. Se connecter à https://docs.numerique.gouv.fr (ou votre instance) via ProConnect
 2. Ouvrir les DevTools du navigateur (F12) → onglet **Application** → **Cookies**
-3. Copier la valeur du cookie `docs_sessionid`
+3. Copier la valeur du cookie `docs_sessionid` et la placer dans `DOCS_SESSION_COOKIE`
 
 > ⚠️ Ce cookie a une durée de vie limitée. Voir [Sécurité](#sécurité) pour la rotation.
+
+**Précédence** : `DOCS_SESSION_COOKIE` (env) > `DOCS_SESSION_FILE` > chemin par défaut.
 
 ### Mode OIDC (cible)
 
@@ -80,13 +176,14 @@ Ajouter dans `claude_desktop_config.json` (macOS : `~/Library/Application Suppor
       "args": ["run", "--directory", "/chemin/vers/mcp-docs", "mcp-docs"],
       "env": {
         "DOCS_BASE_URL": "https://docs.numerique.gouv.fr",
-        "DOCS_AUTH_MODE": "session",
-        "DOCS_SESSION_COOKIE": "<votre-cookie-docs_sessionid>"
+        "DOCS_AUTH_MODE": "session"
       }
     }
   }
 }
 ```
+
+Le cookie n'apparaît **pas** dans la config — il est lu depuis `~/.local/state/mcp-docs/session.json`, alimenté par `mcp-docs-refresh-session` (voir [Configuration](#configuration)). Si tu préfères malgré tout l'injecter en env, ajoute `"DOCS_SESSION_COOKIE": "..."` (mais tu perds la rotation automatique et le cookie finit écrit dans ce fichier de config).
 
 Redémarrer Claude Desktop. Le serveur expose alors les 25 tools MCP.
 
@@ -224,12 +321,18 @@ En cas d'erreur (cookie expiré, URL incorrecte), le code de sortie est `1` et l
 
 ### Rotation des secrets
 
-Le cookie `docs_sessionid` a une durée de vie limitée (expiration ProConnect). En cas de doute sur une compromission :
+Le cookie `docs_sessionid` a une durée de vie limitée (expiration Django / ProConnect). En mode fichier — recommandé — la rotation est automatique via `mcp-docs-refresh-session` (fast-path s'il est encore valide, sinon Playwright extrait un nouveau cookie du navigateur). Avec le plist launchd ci-dessus, c'est totalement transparent tant que la session ProConnect IdP tient.
 
-1. **Révoquer la session** : se déconnecter de https://docs.numerique.gouv.fr (invalide le cookie côté serveur)
-2. **Supprimer le cookie** des variables d'environnement (`~/.claude.json`, `.mcp.json`, tout fichier de config)
-3. **Se reconnecter** via ProConnect pour obtenir un nouveau cookie
-4. **Mettre à jour** la config MCP avec le nouveau cookie
+En cas de compromission avérée d'un cookie :
+
+1. **Invalider côté serveur** : se déconnecter de https://docs.numerique.gouv.fr depuis le navigateur où le cookie est vivant (logout UI → destruction de la session Django correspondante).
+2. **Nuker le profil Playwright** pour forcer une re-saisie ProConnect :
+   ```bash
+   rm -rf ~/.local/share/mcp-docs/browser-profile
+   rm ~/.local/state/mcp-docs/session.json
+   ```
+3. **Re-générer** : `uv run mcp-docs-refresh-session` (login ProConnect interactif, nouveau cookie écrit).
+4. **Nettoyer** : retirer tout `DOCS_SESSION_COOKIE` résiduel de `~/.claude.json`, `.mcp.json`, `claude_desktop_config.json`.
 
 Pour le mode OIDC : révoquer le token auprès du fournisseur d'identité et en regénérer un.
 

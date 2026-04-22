@@ -12,7 +12,7 @@ class TestLifespan:
         mock_config = DocsConfig(base_url="https://test.local", auth_mode="session", session_cookie="x")
         mock_client = AsyncMock(spec=DocsClient)
         with (
-            patch("mcp_docs.app.DocsConfig", return_value=mock_config),
+            patch("mcp_docs.app.load_config", return_value=mock_config),
             patch("mcp_docs.app.DocsClient", return_value=mock_client),
         ):
             async with app_lifespan(None) as ctx:  # type: ignore[arg-type]
