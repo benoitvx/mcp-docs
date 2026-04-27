@@ -95,10 +95,15 @@ Réponse : `201 Created` avec `id`, `title`.
 GET /api/v1.0/users/me/
 ```
 
+#### Récupérer les métadonnées d'un document
+```
+GET /api/v1.0/documents/{id}/
+```
+Retourne notamment le champ `creator` (UUID ou objet imbriqué selon le serializer). Utilisé par `docs_delete_document` pour vérifier que l'utilisateur courant est bien le créateur avant tout `DELETE`.
+
 ### Endpoints non disponibles (à suivre)
 
 - `PUT /api/v1.0/documents/{id}/` — mise à jour du contenu (ne supporte pas l'envoi de Markdown, attend du Yjs base64)
-- `DELETE /api/v1.0/documents/{id}/` — suppression
 
 ### Prochaines étapes
 
@@ -181,6 +186,7 @@ Doc MCP SDK : https://modelcontextprotocol.io/
 | `docs_list_documents` | Lister les documents (paginé, filtrable) | P0 | ✅ |
 | `docs_get_document_content` | Récupérer le contenu en markdown/html/json | P0 | ✅ |
 | `docs_create_document` | Créer un document depuis du Markdown | P0 | ✅ |
+| `docs_delete_document` | Supprimer un document (créateur uniquement — vérification client-side) | P0 | ✅ |
 | `docs_search_documents` | Rechercher par titre ou contenu | P1 | ✅ |
 | `docs_get_me` | Infos de l'utilisateur connecté | P1 | ✅ |
 | `docs_list_children` | Lister les sous-documents | P2 | ✅ |

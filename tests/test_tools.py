@@ -26,6 +26,8 @@ from .conftest import (
     SAMPLE_CHILDREN,
     SAMPLE_CONTENT,
     SAMPLE_CREATED,
+    SAMPLE_DOCUMENT_DETAIL,
+    SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR,
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
     make_config,
@@ -147,17 +149,56 @@ class TestCreateDocumentTool:
 
 class TestDeleteDocumentTool:
     @respx.mock
-    async def test_success(self, ctx: MagicMock) -> None:
+    async def test_success_when_creator(self, ctx: MagicMock) -> None:
         doc_id = "aaaa-bbbb-cccc-0001"
-        respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        respx.get(f"{API}/documents/{doc_id}/").mock(
+            return_value=Response(200, json=SAMPLE_DOCUMENT_DETAIL)
+        )
+        respx.get(f"{API}/users/me/").mock(return_value=Response(200, json=SAMPLE_USER))
+        delete_route = respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
         result = await docs_delete_document(ctx=ctx, document_id=doc_id)
         data = json.loads(result)
         assert data["status"] == "deleted"
         assert data["document_id"] == doc_id
+        assert delete_route.called
 
     @respx.mock
-    async def test_not_found(self, ctx: MagicMock) -> None:
-        respx.delete(f"{API}/documents/missing/").mock(return_value=Response(404))
+    async def test_success_when_creator_is_dict(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        detail = {**SAMPLE_DOCUMENT_DETAIL, "creator": {"id": "user-001", "email": "x@y.z"}}
+        respx.get(f"{API}/documents/{doc_id}/").mock(return_value=Response(200, json=detail))
+        respx.get(f"{API}/users/me/").mock(return_value=Response(200, json=SAMPLE_USER))
+        delete_route = respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        result = await docs_delete_document(ctx=ctx, document_id=doc_id)
+        assert json.loads(result)["status"] == "deleted"
+        assert delete_route.called
+
+    @respx.mock
+    async def test_refused_when_not_creator(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0002"
+        respx.get(f"{API}/documents/{doc_id}/").mock(
+            return_value=Response(200, json=SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR)
+        )
+        respx.get(f"{API}/users/me/").mock(return_value=Response(200, json=SAMPLE_USER))
+        delete_route = respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        result = await docs_delete_document(ctx=ctx, document_id=doc_id)
+        assert "you can only delete documents you created" in result.lower()
+        assert delete_route.called is False
+
+    @respx.mock
+    async def test_refused_when_creator_missing(self, ctx: MagicMock) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        detail = {k: v for k, v in SAMPLE_DOCUMENT_DETAIL.items() if k != "creator"}
+        respx.get(f"{API}/documents/{doc_id}/").mock(return_value=Response(200, json=detail))
+        respx.get(f"{API}/users/me/").mock(return_value=Response(200, json=SAMPLE_USER))
+        delete_route = respx.delete(f"{API}/documents/{doc_id}/").mock(return_value=Response(204))
+        result = await docs_delete_document(ctx=ctx, document_id=doc_id)
+        assert "you can only delete documents you created" in result.lower()
+        assert delete_route.called is False
+
+    @respx.mock
+    async def test_not_found_on_get(self, ctx: MagicMock) -> None:
+        respx.get(f"{API}/documents/missing/").mock(return_value=Response(404))
         result = await docs_delete_document(ctx=ctx, document_id="missing")
         assert "not found" in result.lower()
 

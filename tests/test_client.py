@@ -16,6 +16,7 @@ from .conftest import (
     SAMPLE_CHILDREN,
     SAMPLE_CONTENT,
     SAMPLE_CREATED,
+    SAMPLE_DOCUMENT_DETAIL,
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
     make_config,
@@ -208,6 +209,25 @@ class TestUpdateDocumentContent:
 
         with pytest.raises(DocsAPIError):
             await docs_client_session.update_document_content("target", "x")
+
+
+class TestGetDocument:
+    @respx.mock
+    async def test_get_document(self, docs_client_session: DocsClient) -> None:
+        doc_id = "aaaa-bbbb-cccc-0001"
+        route = respx.get(f"{API}/documents/{doc_id}/").mock(
+            return_value=Response(200, json=SAMPLE_DOCUMENT_DETAIL)
+        )
+        result = await docs_client_session.get_document(doc_id)
+        assert result.id == doc_id
+        assert result.creator == "user-001"
+        assert route.called
+
+    @respx.mock
+    async def test_get_document_404(self, docs_client_session: DocsClient) -> None:
+        respx.get(f"{API}/documents/missing/").mock(return_value=Response(404))
+        with pytest.raises(DocsNotFoundError):
+            await docs_client_session.get_document("missing")
 
 
 class TestDeleteDocument:

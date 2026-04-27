@@ -140,14 +140,37 @@ async def docs_delete_document(
 ) -> str:
     """Delete a document (soft delete — moved to trashbin).
 
+    Only documents the authenticated user created can be deleted. Shared
+    documents (where the user has only an editor/owner access role) are
+    refused, even if the backend would allow the deletion.
+
     Args:
         document_id: UUID of the document to delete.
     """
     if not document_id or not document_id.strip():
         return "Error: document_id is required."
 
+    client = _get_client(ctx)
     try:
-        await _get_client(ctx).delete_document(document_id)
+        doc = await client.get_document(document_id)
+        me = await client.get_me()
+    except DocsAPIError as e:
+        return _error_response(e)
+
+    creator_id: str | None
+    if isinstance(doc.creator, str):
+        creator_id = doc.creator
+    elif isinstance(doc.creator, dict):
+        raw = doc.creator.get("id")
+        creator_id = raw if isinstance(raw, str) else None
+    else:
+        creator_id = None
+
+    if creator_id is None or creator_id != me.id:
+        return "Error: you can only delete documents you created."
+
+    try:
+        await client.delete_document(document_id)
     except DocsAPIError as e:
         return _error_response(e)
 

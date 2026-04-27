@@ -12,6 +12,7 @@ class DocumentSummary(BaseModel):
     title: str | None = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    creator: str | dict | None = None
 
 
 class DocumentContent(BaseModel):

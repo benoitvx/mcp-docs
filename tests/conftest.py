@@ -70,6 +70,22 @@ SAMPLE_USER = {
     "name": "Test User",
 }
 
+SAMPLE_DOCUMENT_DETAIL = {
+    "id": "aaaa-bbbb-cccc-0001",
+    "title": "Document One",
+    "creator": "user-001",
+    "created_at": "2026-01-01T10:00:00Z",
+    "updated_at": "2026-04-01T12:00:00Z",
+}
+
+SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR = {
+    "id": "aaaa-bbbb-cccc-0002",
+    "title": "Shared Document",
+    "creator": "user-999",
+    "created_at": "2026-01-01T10:00:00Z",
+    "updated_at": "2026-04-01T12:00:00Z",
+}
+
 SAMPLE_CHILDREN = {
     "count": 1,
     "next": None,

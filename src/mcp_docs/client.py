@@ -269,6 +269,11 @@ class DocsClient:
         )
         return PaginatedResponse[DocumentSummary].model_validate(data)
 
+    async def get_document(self, document_id: str) -> DocumentSummary:
+        """Fetch a document's metadata (including creator)."""
+        data = await self._get(f"{_API_PREFIX}/documents/{document_id}/")
+        return DocumentSummary.model_validate(data)
+
     async def delete_document(self, document_id: str) -> None:
         """Delete a document (soft delete, moved to trashbin)."""
         await self._delete(

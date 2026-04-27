@@ -1,5 +1,29 @@
 # Todo — Prochaines étapes
 
+## 🎯 Tâche en cours — Restreindre `docs_delete_document` au créateur
+
+- [x] Étendre `DocumentSummary` avec un champ `creator: str | dict | None`
+- [x] Ajouter `DocsClient.get_document(document_id)` (GET `/documents/{id}/`)
+- [x] Modifier `docs_delete_document` : 2 GET (document + me) puis comparer `creator`/`me.id` avant DELETE
+- [x] Fixtures de test (`SAMPLE_DOCUMENT_DETAIL`, `SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR`)
+- [x] Tests tools (succès créateur, succès dict, refus non-créateur, refus creator manquant, 404)
+- [x] Tests client pour `get_document`
+- [x] Mise à jour CLAUDE.md (table tools + endpoint)
+- [x] `uv run ruff check . && uv run pyright && uv run pytest` (180 tests OK, lint/pyright clean)
+
+### Résultat
+
+`docs_delete_document` refuse désormais toute suppression d'un document dont l'utilisateur authentifié n'est pas le créateur. Mécanique : avant le `DELETE`, le tool fait `GET /documents/{id}/` puis `GET /users/me/`, extrait `creator` (str ou `{"id": ...}`) et compare avec `me.id`. Si pas de match (ou `creator` absent), retour `"Error: you can only delete documents you created."` sans appel `DELETE`. La couche transport (session/CSRF aujourd'hui, OIDC plus tard) n'est pas affectée.
+
+Fichiers modifiés : `src/mcp_docs/models.py`, `src/mcp_docs/client.py`, `src/mcp_docs/tools.py`, `tests/conftest.py`, `tests/test_tools.py`, `tests/test_client.py`, `CLAUDE.md`.
+
+Test E2E (Claude Desktop, 2026-04-27) ✅ :
+- Création + suppression d'un doc créé par soi → corbeille OK.
+- Suppression d'un doc partagé ("tonton du bled", non-créateur) → refus client-side, pas de DELETE.
+- UUID `00000000-…` (placeholder renvoyé par le backend Docs au lieu d'un 404) → également refusé. Défense en profondeur confirmée.
+
+---
+
 ## ✅ Fait
 
 ### Fondations
