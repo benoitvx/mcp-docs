@@ -29,7 +29,12 @@ jobs:
         run: uv run pytest --cov=mcp_docs -v
 
       - name: Audit dependencies
-        run: uv run pip-audit
+        # Audit only the project's runtime deps (--no-dev), not the dev
+        # toolchain itself. pip-audit pulls pip in as a transitive dep,
+        # and pip CVEs are irrelevant for the published package.
+        run: |
+          uv export --no-hashes --no-emit-project --no-dev --format requirements-txt > /tmp/requirements.txt
+          uv run pip-audit -r /tmp/requirements.txt
 
   secrets-scan:
     runs-on: ubuntu-latest
