@@ -3,7 +3,8 @@
 .env
 
 # Claude Code
-.claude/
+.claude/settings.local.json
+.agent-vm.runtime.sh
 
 # Python
 __pycache__/
