@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def _error_response(err: DocsAPIError) -> str:
     """Return a safe error message without leaking internal details."""
-    logger.warning("API error: HTTP %d — %s", err.status_code, err.message)
+    logger.warning("API error: HTTP %d — %s — body=%s", err.status_code, err.message, err.body)
     if isinstance(err, DocsAuthError):
         return "Authentication failed. Please check your credentials."
     if isinstance(err, DocsPermissionError):
@@ -228,11 +228,11 @@ async def docs_update_document_content(
         return "Error: content is required."
 
     try:
-        data = await _get_client(ctx).update_document_content(document_id, content)
+        updated_id = await _get_client(ctx).update_document_content(document_id, content)
     except DocsAPIError as e:
         return _error_response(e)
 
-    return json.dumps({"id": data.id, "status": "updated"}, ensure_ascii=False)
+    return json.dumps({"id": updated_id, "status": "updated"}, ensure_ascii=False)
 
 
 # --- P1 Tools ---

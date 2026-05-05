@@ -29,3 +29,12 @@ def browser_profile_path() -> Path:
     fallback to ``~/.local/share/mcp-docs/browser-profile``.
     """
     return _xdg_home("XDG_DATA_HOME", ".local/share") / _APP_NAME / "browser-profile"
+
+
+def log_file_path() -> Path:
+    """Return the default path of the server log file.
+
+    Follows XDG Base Directory: ``$XDG_STATE_HOME/mcp-docs/server.log`` with
+    fallback to ``~/.local/state/mcp-docs/server.log``.
+    """
+    return _xdg_home("XDG_STATE_HOME", ".local/state") / _APP_NAME / "server.log"

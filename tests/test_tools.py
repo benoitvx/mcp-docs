@@ -84,7 +84,7 @@ class TestGetDocumentContentTool:
     @respx.mock
     async def test_markdown(self, ctx: MagicMock) -> None:
         doc_id = "aaaa-bbbb-cccc-0001"
-        respx.get(f"{API}/documents/{doc_id}/content/").mock(
+        respx.get(f"{API}/documents/{doc_id}/formatted-content/").mock(
             return_value=Response(200, json=SAMPLE_CONTENT)
         )
         result = await docs_get_document_content(ctx=ctx, document_id=doc_id)
@@ -95,7 +95,7 @@ class TestGetDocumentContentTool:
     async def test_html_format(self, ctx: MagicMock) -> None:
         doc_id = "aaaa-bbbb-cccc-0001"
         html_content = {**SAMPLE_CONTENT, "content": "<p>Hello</p>"}
-        respx.get(f"{API}/documents/{doc_id}/content/").mock(
+        respx.get(f"{API}/documents/{doc_id}/formatted-content/").mock(
             return_value=Response(200, json=html_content)
         )
         result = await docs_get_document_content(ctx=ctx, document_id=doc_id, content_format="html")
@@ -104,7 +104,7 @@ class TestGetDocumentContentTool:
 
     @respx.mock
     async def test_not_found(self, ctx: MagicMock) -> None:
-        respx.get(f"{API}/documents/missing/content/").mock(return_value=Response(404))
+        respx.get(f"{API}/documents/missing/formatted-content/").mock(return_value=Response(404))
         result = await docs_get_document_content(ctx=ctx, document_id="missing")
         assert "not found" in result.lower()
 
@@ -248,12 +248,10 @@ class TestUpdateDocumentContentTool:
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        respx.get(f"{API}/documents/{temp_id}/").mock(
-            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZQ=="})
+        respx.get(f"{API}/documents/{temp_id}/content/").mock(
+            return_value=Response(200, text="ZmFrZQ==", headers={"Content-Type": "text/plain"})
         )
-        respx.patch(f"{API}/documents/{target_id}/").mock(
-            return_value=Response(200, json={"id": target_id, "title": "Doc"})
-        )
+        respx.patch(f"{API}/documents/{target_id}/content/").mock(return_value=Response(204))
         respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         result = await docs_update_document_content(ctx=ctx, document_id=target_id, content="# title")

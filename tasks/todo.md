@@ -1,6 +1,43 @@
 # Todo — Prochaines étapes
 
-## 🎯 Tâche en cours — Restreindre `docs_delete_document` au créateur
+## 🎯 Tâche en cours — Diagnostic des erreurs API (logger les bodies)
+
+**Symptôme** : 500 sur `docs_update_document_content` côté Claude Code (session Obsidian, 2026-05-05). Le tool renvoie `"Request failed (HTTP 500)."` sans aucun détail. Le body de réponse de l'API est jeté avant même d'être loggué — `client.py:_raise_for_api_status` ne lit pas `resp.text`. En plus, les `logger.warning(...)` actuels partent en stderr et **Claude Code ne capture pas le stderr** des subprocess MCP dans ses `.jsonl` (seul Claude Desktop le faisait).
+
+**Objectif** : surfacer le body API + méthode + URL dans un fichier de log persistant côté serveur, **sans** changer le message renvoyé au LLM (ANSSI : pas de leak d'internes).
+
+- [x] `paths.py` : ajouter `log_file_path()` → `~/.local/state/mcp-docs/server.log` (XDG_STATE)
+- [x] `app.py` : `_configure_logging()` au boot, FileHandler dédié sur le logger `mcp_docs` (pas root, pas de doublon avec FastMCP)
+- [x] `exceptions.py` : champ optionnel `body: str | None` dans `DocsAPIError` + sous-classes (default None)
+- [x] `client.py` `_raise_for_api_status` : tronquer `resp.text` à 1KB, logger `method URL → status` + body, passer le body dans l'exception
+- [x] `tools.py` `_error_response` : log enrichi (`status / body`) — message user-facing inchangé
+- [x] Vérifier `tests/test_tools.py:296` (assert `"Request failed (HTTP 500)"`) — doit passer sans modif
+- [x] Reproduction du 500 → log surface `keys=[...]` sans `content` → cause identifiée
+
+### Diagnostic
+
+Pas de bug Y-Provider. Refactor délibéré côté backend Docs ([PR suitenumerique/docs#2171](https://github.com/suitenumerique/docs/pull/2171), v5.0.0, mergée 2026-04-27) : le champ `content` a été retiré du serializer `GET /documents/{id}/` pour éviter de fetch S3 sur chaque metadata. La lecture/écriture du contenu vit maintenant sur des routes dédiées :
+
+- `GET /documents/{id}/content/` (no params) → stream Yjs base64 brut en `text/plain` (avec ETag)
+- `PATCH /documents/{id}/content/` `{"content": "<b64>", "websocket": <bool>}` → `204 No Content`
+- `GET /documents/{id}/formatted-content/?content_format=…` → ancien `/content/?content_format=…` renommé
+
+Confirmé empiriquement par curl côté prod (2026-05-05).
+
+### Patch appliqué
+
+- [x] `client.py` `get_document_content` → migre vers `/formatted-content/`
+- [x] `client.py` `_markdown_to_yjs_base64` → lit le Yjs base64 sur `/documents/{temp_id}/content/` (`text/plain`) au lieu du JSON detail
+- [x] `client.py` `update_document_content` → PATCH sur `/documents/{id}/content/`, retourne `str` (id) au lieu de `DocumentSummary` (l'endpoint renvoie `204`)
+- [x] `tools.py` `docs_update_document_content` → consomme le nouveau type de retour
+- [x] Tests adaptés (mocks respx : URLs et response types)
+- [x] `CLAUDE.md` § Endpoints — section markdown/yjs/PATCH refresh
+- [x] `ruff check` ✅ / `pyright` ✅ / `pytest` ✅ (180 tests)
+- [ ] **À tester côté Mac** : redémarrer la session MCP (sync nouvelle version `mcp-docs`), refaire l'update qui 500 — doit passer maintenant
+
+---
+
+## ✅ Fait — Restreindre `docs_delete_document` au créateur
 
 - [x] Étendre `DocumentSummary` avec un champ `creator: str | dict | None`
 - [x] Ajouter `DocsClient.get_document(document_id)` (GET `/documents/{id}/`)

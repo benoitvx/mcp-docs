@@ -43,15 +43,31 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+_BODY_TRUNCATE = 1024
+
+
 def _raise_for_api_status(resp: httpx.Response) -> None:
-    """Raise a typed DocsAPIError if the response indicates an error."""
+    """Raise a typed DocsAPIError if the response indicates an error.
+
+    The response body (truncated) is captured on the exception and logged
+    server-side so operators can diagnose 4xx/5xx without leaking it to the
+    LLM caller.
+    """
     if resp.is_success:
         return
     status = resp.status_code
+    body = resp.text[:_BODY_TRUNCATE] if resp.text else None
+    logger.warning(
+        "Docs API %s %s → HTTP %d body=%s",
+        resp.request.method,
+        resp.request.url,
+        status,
+        body,
+    )
     exc_cls = _STATUS_MAP.get(status, DocsAPIError)
     if exc_cls is DocsAPIError:
-        raise DocsAPIError(status, f"API request failed (HTTP {status})")
-    raise exc_cls()  # pyright: ignore[reportCallIssue]  # subclasses define default message
+        raise DocsAPIError(status, f"API request failed (HTTP {status})", body=body)
+    raise exc_cls(body=body)  # pyright: ignore[reportCallIssue]  # subclasses define default message
 
 
 class DocsClient:
@@ -147,9 +163,14 @@ class DocsClient:
         document_id: str,
         content_format: str = "markdown",
     ) -> DocumentContent:
-        """Retrieve document content in the specified format."""
+        """Retrieve document content in the specified format.
+
+        As of Docs v5.0.0 (PR suitenumerique/docs#2171, 2026-04-27), this is
+        served by ``/formatted-content/`` — the legacy ``/content/`` route now
+        streams the raw Yjs base64 instead.
+        """
         data = await self._get(
-            f"{_API_PREFIX}/documents/{document_id}/content/",
+            f"{_API_PREFIX}/documents/{document_id}/formatted-content/",
             params={"content_format": content_format},
         )
         return DocumentContent.model_validate(data)
@@ -205,16 +226,24 @@ class DocsClient:
 
         The backend runs a Y-Provider service that converts markdown to the
         BlockNote/Yjs format on document creation. We exploit this by creating
-        a temporary document with the markdown, copying its generated content,
-        then deleting the temp document.
+        a temporary document with the markdown, reading its converted content
+        from the dedicated ``/content/`` endpoint (which streams the raw Yjs
+        base64 as ``text/plain``), then deleting the temp document.
         """
         temp = await self.create_document(markdown, title="_mcp_temp_convert")
         temp_id = temp.id
         try:
-            data = await self._get(f"{_API_PREFIX}/documents/{temp_id}/")
-            content = data.get("content")
-            if not content:
-                raise DocsAPIError(500, "Temp doc returned empty content field")
+            async with self._semaphore:
+                resp = await self._client.get(f"{_API_PREFIX}/documents/{temp_id}/content/")
+                _raise_for_api_status(resp)
+                content = resp.text
+            if not content.strip():
+                logger.warning(
+                    "Temp doc /content/ returned empty body (markdown=%d chars, status=%d)",
+                    len(markdown),
+                    resp.status_code,
+                )
+                raise DocsAPIError(500, "Temp doc returned empty content")
             return content
         finally:
             try:
@@ -226,19 +255,23 @@ class DocsClient:
         self,
         document_id: str,
         content: str,
-    ) -> DocumentSummary:
+    ) -> str:
         """Replace a document's content with markdown.
 
         Markdown formatting is preserved (headings, bold, italic, lists, etc.)
-        via the backend's Y-Provider conversion service.
+        via the backend's Y-Provider conversion service. Content is written via
+        the dedicated ``PATCH /documents/{id}/content/`` endpoint (Docs v5.0.0+,
+        PR suitenumerique/docs#2171). Returns the document id on success.
         """
         yjs_b64 = await self._markdown_to_yjs_base64(content)
-        raw = await self._patch(
-            f"{_API_PREFIX}/documents/{document_id}/",
-            json={"content": yjs_b64, "websocket": True},
-            headers=self._make_csrf_headers(),
-        )
-        return DocumentSummary.model_validate(raw)
+        async with self._semaphore:
+            resp = await self._client.patch(
+                f"{_API_PREFIX}/documents/{document_id}/content/",
+                json={"content": yjs_b64, "websocket": True},
+                headers=self._make_csrf_headers(),
+            )
+            _raise_for_api_status(resp)
+        return document_id
 
     async def search_documents(
         self,

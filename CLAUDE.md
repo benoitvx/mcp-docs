@@ -61,11 +61,13 @@ Réponse paginée : `count`, `results[]` avec `id`, `title`, `created_at`, `upda
 
 Filtres utiles : `?title=`, `?q=` (recherche), `?is_creator_me=true`.
 
-#### Récupérer le contenu d'un document
+#### Récupérer le contenu d'un document (rendu)
 ```
-GET /api/v1.0/documents/{id}/content/?content_format=markdown
+GET /api/v1.0/documents/{id}/formatted-content/?content_format=markdown
 ```
-Formats supportés : `markdown`, `html`, `json`.
+Formats supportés : `markdown`, `html`, `json`. Renvoyé en JSON.
+
+> Depuis Docs v5.0.0 ([PR #2171](https://github.com/suitenumerique/docs/pull/2171), 2026-04-27), cet endpoint a été renommé : avant c'était `/content/?content_format=…`. La route `/content/` (sans paramètre) est désormais réservée au flux Yjs base64 brut.
 
 Réponse :
 ```json
@@ -77,6 +79,12 @@ Réponse :
   "updated_at": "..."
 }
 ```
+
+#### Récupérer le Yjs base64 brut d'un document
+```
+GET /api/v1.0/documents/{id}/content/
+```
+Stream le blob Yjs base64 stocké côté S3. Réponse `Content-Type: text/plain`, support de `ETag` / `If-None-Match` / `Last-Modified` / `If-Modified-Since` (304). Utilisé par `_markdown_to_yjs_base64` pour relire le Yjs converti par le Y-Provider depuis un doc temporaire.
 
 #### Créer un document depuis un fichier Markdown
 ```
@@ -101,9 +109,18 @@ GET /api/v1.0/documents/{id}/
 ```
 Retourne notamment le champ `creator` (UUID ou objet imbriqué selon le serializer). Utilisé par `docs_delete_document` pour vérifier que l'utilisateur courant est bien le créateur avant tout `DELETE`.
 
+#### Mettre à jour le contenu d'un document
+```
+PATCH /api/v1.0/documents/{id}/content/
+Content-Type: application/json
+
+{"content": "<base64 yjs>", "websocket": true}
+```
+Renvoie `204 No Content` en cas de succès. Validation stricte : le serveur fait `b64decode(value, validate=True)`. L'ancien `PATCH /documents/{id}/` ne touche plus au contenu depuis Docs v5.0.0 ([PR #2171](https://github.com/suitenumerique/docs/pull/2171)) — il reste utilisé pour la metadata (titre, etc.).
+
 ### Endpoints non disponibles (à suivre)
 
-- `PUT /api/v1.0/documents/{id}/` — mise à jour du contenu (ne supporte pas l'envoi de Markdown, attend du Yjs base64)
+- Conversion markdown → Yjs sans passer par un doc temporaire — pas d'endpoint public exposé. Le trick reste : POST multipart sur `/documents/` puis GET `/documents/{id}/content/` du temp doc.
 
 ### Prochaines étapes
 

@@ -82,7 +82,7 @@ class TestGetDocumentContent:
     @respx.mock
     async def test_get_content_markdown(self, docs_client_session: DocsClient) -> None:
         doc_id = "aaaa-bbbb-cccc-0001"
-        route = respx.get(f"{API}/documents/{doc_id}/content/").mock(
+        route = respx.get(f"{API}/documents/{doc_id}/formatted-content/").mock(
             return_value=Response(200, json=SAMPLE_CONTENT)
         )
         result = await docs_client_session.get_document_content(doc_id)
@@ -91,7 +91,7 @@ class TestGetDocumentContent:
 
     @respx.mock
     async def test_get_content_404(self, docs_client_session: DocsClient) -> None:
-        respx.get(f"{API}/documents/nonexistent/content/").mock(return_value=Response(404))
+        respx.get(f"{API}/documents/nonexistent/formatted-content/").mock(return_value=Response(404))
         with pytest.raises(DocsNotFoundError):
             await docs_client_session.get_document_content("nonexistent")
 
@@ -140,19 +140,19 @@ class TestUpdateDocumentContent:
         create_route = respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        # Step 2: GET temp doc → returns content base64
-        get_temp_route = respx.get(f"{API}/documents/{temp_id}/").mock(
-            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZXl4cw=="})
+        # Step 2: GET temp doc /content/ → raw Yjs base64 as text/plain
+        get_temp_route = respx.get(f"{API}/documents/{temp_id}/content/").mock(
+            return_value=Response(200, text="ZmFrZXl4cw==", headers={"Content-Type": "text/plain"})
         )
-        # Step 3: PATCH target doc with that content
-        patch_route = respx.patch(f"{API}/documents/{target_id}/").mock(
-            return_value=Response(200, json={"id": target_id, "title": "Doc"})
+        # Step 3: PATCH target doc /content/ with that base64 → 204 No Content
+        patch_route = respx.patch(f"{API}/documents/{target_id}/content/").mock(
+            return_value=Response(204)
         )
         # Step 4: DELETE temp doc
         delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         result = await docs_client_session.update_document_content(target_id, "# hello")
-        assert result.id == target_id
+        assert result == target_id
         assert create_route.called
         assert get_temp_route.called
         assert patch_route.called
@@ -171,10 +171,10 @@ class TestUpdateDocumentContent:
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        respx.get(f"{API}/documents/{temp_id}/").mock(
-            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZQ=="})
+        respx.get(f"{API}/documents/{temp_id}/content/").mock(
+            return_value=Response(200, text="ZmFrZQ==", headers={"Content-Type": "text/plain"})
         )
-        respx.patch(f"{API}/documents/missing/").mock(return_value=Response(404))
+        respx.patch(f"{API}/documents/missing/content/").mock(return_value=Response(404))
         respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         with pytest.raises(DocsNotFoundError):
@@ -186,10 +186,10 @@ class TestUpdateDocumentContent:
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        respx.get(f"{API}/documents/{temp_id}/").mock(
-            return_value=Response(200, json={"id": temp_id, "content": "ZmFrZQ=="})
+        respx.get(f"{API}/documents/{temp_id}/content/").mock(
+            return_value=Response(200, text="ZmFrZQ==", headers={"Content-Type": "text/plain"})
         )
-        respx.patch(f"{API}/documents/target/").mock(return_value=Response(500))
+        respx.patch(f"{API}/documents/target/content/").mock(return_value=Response(500))
         delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         with pytest.raises(DocsAPIError):
@@ -202,8 +202,8 @@ class TestUpdateDocumentContent:
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        respx.get(f"{API}/documents/{temp_id}/").mock(
-            return_value=Response(200, json={"id": temp_id, "content": None})
+        respx.get(f"{API}/documents/{temp_id}/content/").mock(
+            return_value=Response(200, text="", headers={"Content-Type": "text/plain"})
         )
         respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
@@ -376,7 +376,7 @@ class TestRetry:
 
     @respx.mock
     async def test_no_retry_on_404(self, docs_client_session: DocsClient) -> None:
-        route = respx.get(f"{API}/documents/bad-id/content/").mock(return_value=Response(404))
+        route = respx.get(f"{API}/documents/bad-id/formatted-content/").mock(return_value=Response(404))
         with pytest.raises(DocsNotFoundError):
             await docs_client_session.get_document_content("bad-id")
         assert route.call_count == 1
@@ -493,7 +493,7 @@ class TestExceptionMapping:
 
     @respx.mock
     async def test_404_raises_not_found_error(self, docs_client_session: DocsClient) -> None:
-        respx.get(f"{API}/documents/bad/content/").mock(return_value=Response(404))
+        respx.get(f"{API}/documents/bad/formatted-content/").mock(return_value=Response(404))
         with pytest.raises(DocsNotFoundError):
             await docs_client_session.get_document_content("bad")
 
