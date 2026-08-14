@@ -13,6 +13,7 @@ Il expose **25 tools** et 2 resources permettant à un agent IA d'interagir avec
 - [Configuration](#configuration)
 - [Utilisation avec Claude Desktop](#utilisation-avec-claude-desktop)
 - [Tools disponibles](#tools-disponibles)
+- [Synchronisation vers Obsidian](#synchronisation-vers-obsidian)
 - [Exemples de workflows](#exemples-de-workflows)
 - [Validation de la configuration](#validation-de-la-configuration)
 - [Sécurité](#sécurité)
@@ -290,12 +291,94 @@ Claude Desktop expose alors les 25 tools MCP. En cas d'échec : `tail -n 50 ~/Li
 | `docs_list_trashbin` | Lister les documents supprimés |
 | `docs_restore_document` | Restaurer un document depuis la corbeille |
 
+### 🔄 Synchronisation vers Obsidian (1)
+
+| Tool | Description |
+|------|-------------|
+| `docs_sync_tree` | Répliquer un document et tous ses sous-documents dans un vault Obsidian local |
+
+Voir [Synchronisation vers Obsidian](#synchronisation-vers-obsidian) pour la configuration
+et le fonctionnement.
+
 ### 📚 Resources MCP (2)
 
 | URI | Description |
 |-----|-------------|
 | `docs://user` | Profil de l'utilisateur authentifié |
 | `docs://documents` | 10 documents les plus récemment mis à jour |
+
+---
+
+## Synchronisation vers Obsidian
+
+`docs_sync_tree` réplique un document Docs et **tous ses sous-documents** dans un vault
+Obsidian local. Le sens est unique : Docs est la source de vérité, le vault en est un miroir
+textuel.
+
+### Configuration
+
+```bash
+DOCS_VAULT_PATH=/chemin/vers/le/vault
+```
+
+Sans cette variable, le tool refuse de s'exécuter. C'est le seul dossier où le serveur peut
+écrire : tout chemin est résolu puis vérifié comme descendant de cette racine, liens
+symboliques compris.
+
+### Utilisation
+
+> Synchronise https://docs.numerique.gouv.fr/docs/&lt;uuid&gt;/ dans mon vault, en dry-run d'abord.
+
+| Paramètre | Défaut | Rôle |
+|-----------|--------|------|
+| `document` | — | URL Docs du document parent, ou son UUID |
+| `destination` | `Docs` | Dossier parent dans le vault. L'arbre va dans `<destination>/<titre de la racine>/` |
+| `dry_run` | `false` | Calcule et renvoie le plan sans rien télécharger ni écrire |
+
+### Ce que ça écrit
+
+Convention *folder note* : un document ne devient un dossier que s'il a des enfants.
+
+```
+Docs/🐙 LaSuite - Équipe Hub/
+├── 🐙 LaSuite - Équipe Hub.md          corps du parent
+├── 📆 Roadmap 2026.md                  feuille
+└── 🔮 Vision produit/
+    ├── 🔮 Vision produit.md
+    └── Nom du produit - Tchap.md
+```
+
+Chaque note porte son identité dans le frontmatter :
+
+```yaml
+---
+docs_id: 5b243392-b3a5-4caa-a7e6-e88566e1c72e
+docs_url: https://docs.numerique.gouv.fr/docs/5b243392-b3a5-4caa-a7e6-e88566e1c72e/
+docs_title: "🐙 LaSuite - Équipe Hub"
+docs_updated_at: 2026-07-01T09:12:44.812340Z
+docs_synced_at: 2026-08-14T15:02:00Z
+---
+```
+
+L'identité est l'UUID, jamais le chemin : un document renommé ou déplacé dans Docs reste le
+même fichier, qui est déplacé plutôt que dupliqué. Les propriétés que vous ajoutez vous-même
+(tags, statut) survivent aux mises à jour — seules les clés `docs_*` sont réécrites.
+
+### Coût d'une synchronisation
+
+La découverte de l'arbre ne télécharge aucun contenu : elle ne lit que les dates de mise à
+jour. Seuls les documents dont la date a changé sont récupérés. Sur un arbre de 129 documents,
+la première synchronisation prend ~10 s, les suivantes ~2 s.
+
+### Limites assumées
+
+- **Sens unique.** Une modification locale d'une note synchronisée est écrasée à la prochaine
+  synchronisation de ce document. Versionnez votre vault avec git si ça compte.
+- **Orphelins signalés, jamais supprimés.** Un fichier dont le document n'est plus dans
+  l'arbre est listé dans le rapport ; c'est à vous de décider.
+- **Notes personnelles intouchables.** Un `.md` sans `docs_id` n'est jamais lu ni écrasé.
+- **Images non téléchargées.** Elles restent des URLs authentifiées et ne s'afficheront pas
+  dans Obsidian.
 
 ---
 

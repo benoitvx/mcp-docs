@@ -207,6 +207,7 @@ Doc MCP SDK : https://modelcontextprotocol.io/
 | `docs_search_documents` | Rechercher par titre ou contenu | P1 | ✅ |
 | `docs_get_me` | Infos de l'utilisateur connecté | P1 | ✅ |
 | `docs_list_children` | Lister les sous-documents | P2 | ✅ |
+| `docs_sync_tree` | Miroir d'un arbre de documents vers un vault Obsidian | P1 | ✅ |
 
 ---
 
@@ -314,6 +315,9 @@ DOCS_AUTH_MODE=session
 # Pour auth session (POC) — valeur explicite OU chemin d'un fichier JSON
 DOCS_SESSION_COOKIE=<docs_sessionid value>
 DOCS_SESSION_FILE=/chemin/vers/session.json  # défaut: ~/.local/state/mcp-docs/session.json
+
+# Racine du vault Obsidian — active docs_sync_tree (aucune écriture hors de ce dossier)
+DOCS_VAULT_PATH=/chemin/vers/le/vault
 
 # Pour auth OIDC (cible)
 DOCS_OIDC_TOKEN=<bearer token>

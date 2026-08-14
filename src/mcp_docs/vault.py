@@ -8,7 +8,7 @@ keeps every path inside the configured vault root.
 import os
 import re
 import unicodedata
-from pathlib import Path
+from pathlib import Path, PurePath
 
 _ZERO_WIDTH = "​‌‍﻿"
 _RESERVED = '/\\:*?"<>|'
@@ -98,7 +98,7 @@ def write_atomic(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
-def resolve_within(root: Path, relative: str | Path) -> Path:
+def resolve_within(root: Path, relative: str | PurePath) -> Path:
     """Resolve ``relative`` under ``root``, refusing anything that escapes it.
 
     ``resolve()`` follows symlinks, so a link pointing outside the vault fails

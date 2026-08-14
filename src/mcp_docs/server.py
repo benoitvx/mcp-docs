@@ -10,6 +10,7 @@ import mcp_docs.tools_access  # noqa: F401 — registers access/permission tools
 import mcp_docs.tools_ai  # noqa: F401 — registers AI tools
 import mcp_docs.tools_organize  # noqa: F401 — registers move/duplicate/trashbin tools
 import mcp_docs.tools_sharing  # noqa: F401 — registers link config/favorites tools
+import mcp_docs.tools_sync  # noqa: F401 — registers the Obsidian vault sync tool
 from mcp_docs.app import mcp
 
 
