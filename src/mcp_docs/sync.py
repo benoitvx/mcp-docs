@@ -111,3 +111,29 @@ def plan_layout(root: TreeNode) -> dict[str, PurePosixPath]:
 
     walk(root, PurePosixPath(), sanitize_name(root.title))
     return layout
+
+
+def rewrite_links(markdown: str, base_url: str, names: dict[str, str]) -> str:
+    """Turn links to documents inside the synced tree into Obsidian wikilinks.
+
+    Obsidian resolves ``[[name]]`` by file name wherever the note lives, so the
+    mirror stays navigable without embedding relative paths that would break on
+    every move. Links to documents outside the tree, and ``/media/`` URLs, are
+    left untouched — they still need the browser and its session.
+    """
+    prefix = re.escape(base_url.rstrip("/"))
+    document_url = rf"{prefix}/docs/({_UUID.pattern})/?"
+
+    def as_markdown_link(match: re.Match[str]) -> str:
+        text, doc_id = match.group(1), match.group(2).lower()
+        name = names.get(doc_id)
+        if name is None:
+            return match.group(0)
+        return f"[[{name}]]" if text.strip() in ("", name) else f"[[{name}|{text}]]"
+
+    def as_bare_link(match: re.Match[str]) -> str:
+        name = names.get(match.group(1).lower())
+        return f"[[{name}]]" if name else match.group(0)
+
+    markdown = re.sub(rf"\[([^\]]*)\]\({document_url}\)", as_markdown_link, markdown)
+    return re.sub(document_url, as_bare_link, markdown)
