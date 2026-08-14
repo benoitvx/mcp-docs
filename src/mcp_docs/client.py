@@ -143,6 +143,11 @@ class DocsClient:
         logger.info("Adopted refreshed session cookie from %s", self._session_file)
         return True
 
+    @property
+    def base_url(self) -> httpx.URL:
+        """Base URL of the Docs instance, needed to build and match document links."""
+        return self._client.base_url
+
     async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Send one request, transparently adopting a refreshed cookie on 401.
 

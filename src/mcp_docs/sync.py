@@ -5,15 +5,29 @@ returns a report. That is what keeps a future CLI a thin wrapper.
 """
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
 
 from mcp_docs.client import DocsClient
+from mcp_docs.exceptions import DocsAPIError
 from mcp_docs.models import DocumentSummary
-from mcp_docs.vault import sanitize_name
+from mcp_docs.vault import (
+    compose,
+    index_vault,
+    prune_empty_dirs,
+    read_meta,
+    resolve_within,
+    sanitize_name,
+    write_atomic,
+)
+
+logger = logging.getLogger(__name__)
 
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_MAX_REPORTED_CHANGES = 50
 
 
 @dataclass
@@ -137,3 +151,187 @@ def rewrite_links(markdown: str, base_url: str, names: dict[str, str]) -> str:
 
     markdown = re.sub(rf"\[([^\]]*)\]\({document_url}\)", as_markdown_link, markdown)
     return re.sub(document_url, as_bare_link, markdown)
+
+
+@dataclass
+class Change:
+    """One file-level effect of a sync run."""
+
+    action: str  # created | updated | moved
+    doc_id: str
+    title: str
+    path: str
+    from_path: str | None = None
+
+
+@dataclass
+class SyncReport:
+    """Outcome of a sync run, shaped to be read by an LLM without flooding it."""
+
+    root_title: str = ""
+    destination: str = ""
+    dry_run: bool = False
+    scanned: int = 0
+    created: int = 0
+    updated: int = 0
+    moved: int = 0
+    unchanged: int = 0
+    changes: list[Change] = field(default_factory=list)
+    changes_truncated: bool = False
+    orphans: list[dict[str, str]] = field(default_factory=list)
+    errors: list[dict[str, str]] = field(default_factory=list)
+
+
+def _document_url(base_url: str, doc_id: str) -> str:
+    return f"{base_url.rstrip('/')}/docs/{doc_id}/"
+
+
+def _flatten(node: TreeNode) -> list[TreeNode]:
+    return [node] + [item for child in node.children for item in _flatten(child)]
+
+
+def _record(report: SyncReport, change: Change) -> None:
+    """Append a change, capping the list so the report stays small."""
+    if len(report.changes) < _MAX_REPORTED_CHANGES:
+        report.changes.append(change)
+    else:
+        report.changes_truncated = True
+
+
+def _recorded_updated_at(path: Path) -> str | None:
+    """Read the ``docs_updated_at`` the last sync wrote into a note."""
+    try:
+        return read_meta(path.read_text(encoding="utf-8")).get("docs_updated_at")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+async def sync_tree(
+    client: DocsClient,
+    *,
+    vault_root: Path,
+    destination: str,
+    document: str,
+    dry_run: bool = False,
+) -> SyncReport:
+    """Mirror the tree rooted at ``document`` into ``vault_root / destination``.
+
+    Discovery never downloads content: whether a document must be re-fetched is
+    decided by comparing the server's ``updated_at`` with the one recorded in
+    the local note's frontmatter. Only documents that actually moved are read.
+    """
+    root_id = parse_document_ref(document)
+    tree = await discover_tree(client, root_id)
+    layout = plan_layout(tree)
+    nodes = {node.id: node for node in _flatten(tree)}
+    names = {doc_id: path.stem for doc_id, path in layout.items()}
+
+    vault = vault_root.resolve()
+    destination_dir = resolve_within(vault, destination)
+    index = index_vault(destination_dir)
+
+    report = SyncReport(
+        root_title=tree.title,
+        destination=str(resolve_within(destination_dir, layout[tree.id]).parent.relative_to(vault)),
+        dry_run=dry_run,
+        scanned=len(nodes),
+    )
+
+    pending: list[tuple[TreeNode, Path, Path | None, bool]] = []
+    for doc_id, relative in layout.items():
+        node = nodes[doc_id]
+        target = resolve_within(destination_dir, relative)
+        current = index.get(doc_id)
+        moved = current is not None and current != target
+        stale = current is None or _recorded_updated_at(current) != node.updated_at
+
+        if current is None:
+            action = "created"
+            report.created += 1
+        elif moved:
+            action = "moved"
+            report.moved += 1
+        elif stale:
+            action = "updated"
+            report.updated += 1
+        else:
+            report.unchanged += 1
+            continue
+
+        _record(
+            report,
+            Change(
+                action=action,
+                doc_id=doc_id,
+                title=node.title,
+                path=str(target.relative_to(vault)),
+                from_path=str(current.relative_to(vault)) if moved and current else None,
+            ),
+        )
+        pending.append((node, target, current, stale))
+
+    for doc_id, path in index.items():
+        if doc_id not in layout:
+            report.orphans.append(
+                {
+                    "document_id": doc_id,
+                    "title": path.stem,
+                    "path": str(path.relative_to(vault)),
+                }
+            )
+
+    if dry_run:
+        return report
+
+    await asyncio.gather(
+        *(
+            _apply(client, report, node, target, current, stale, names)
+            for node, target, current, stale in pending
+        )
+    )
+    prune_empty_dirs(destination_dir)
+    return report
+
+
+async def _apply(
+    client: DocsClient,
+    report: SyncReport,
+    node: TreeNode,
+    target: Path,
+    current: Path | None,
+    stale: bool,
+    names: dict[str, str],
+) -> None:
+    """Write one document to disk, moving its previous file when there is one.
+
+    A failure here is recorded and swallowed: one unreadable document must not
+    cost the whole run.
+    """
+    try:
+        existing = ""
+        if current is not None and current != target:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            existing = current.read_text(encoding="utf-8")
+            current.replace(target)
+        elif target.exists():
+            existing = target.read_text(encoding="utf-8")
+
+        if not stale:
+            return
+
+        base_url = str(client.base_url)
+        content = await client.get_document_content(node.id, "markdown")
+        body = rewrite_links(content.content or "", base_url, names)
+        meta = {
+            "docs_id": node.id,
+            "docs_url": _document_url(base_url, node.id),
+            "docs_title": node.title,
+            "docs_updated_at": node.updated_at,
+            "docs_synced_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        write_atomic(target, compose(meta, body, existing=existing or None))
+    except (DocsAPIError, OSError) as error:
+        logger.warning("Sync failed for document %s: %s", node.id, error)
+        report.errors.append(
+            {"document_id": node.id, "title": node.title, "reason": type(error).__name__}
+        )
