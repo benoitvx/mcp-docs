@@ -21,6 +21,7 @@ class DocsConfig(BaseSettings):
     session_cookie: str | None = None
     session_file: Path | None = None
     oidc_token: str | None = None
+    vault_path: Path | None = None
     max_retries: int = Field(default=3, ge=0)
     max_concurrent: int = Field(default=5, ge=1)
 

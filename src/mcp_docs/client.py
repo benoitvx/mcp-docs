@@ -359,6 +359,21 @@ class DocsClient:
         )
         return PaginatedResponse[DocumentSummary].model_validate(data)
 
+    async def list_all_children(self, document_id: str) -> list[DocumentSummary]:
+        """List every child of a document, following pagination to the last page.
+
+        The tree sync needs the complete sibling set to lay out folders, and
+        ``/children/`` caps a page at 100 entries.
+        """
+        collected: list[DocumentSummary] = []
+        page = 1
+        while True:
+            response = await self.list_children(document_id, page=page, page_size=100)
+            collected.extend(response.results)
+            if not response.next:
+                return collected
+            page += 1
+
     async def get_document(self, document_id: str) -> DocumentSummary:
         """Fetch a document's metadata (including creator)."""
         data = await self._get(f"{_API_PREFIX}/documents/{document_id}/")

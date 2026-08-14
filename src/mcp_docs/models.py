@@ -13,6 +13,9 @@ class DocumentSummary(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     creator: str | dict | None = None
+    numchild: int = 0
+    path: str | None = None
+    depth: int | None = None
 
 
 class DocumentContent(BaseModel):
