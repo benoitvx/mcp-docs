@@ -11,9 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from mcp_docs.client import DocsClient
-from mcp_docs.config import DocsConfig, read_session_file
+from mcp_docs.config import DocsConfig, read_session_file, resolve_session_file
 from mcp_docs.exceptions import DocsAPIError
-from mcp_docs.paths import browser_profile_path, session_file_path
+from mcp_docs.paths import browser_profile_path
 
 _PLAYWRIGHT_INSTALL_HINT = (
     "Playwright is required for mcp-docs-refresh-session. Install it with:\n"
@@ -24,11 +24,6 @@ _PLAYWRIGHT_INSTALL_HINT = (
 
 def _stderr(msg: str) -> None:
     print(msg, file=sys.stderr)
-
-
-def _session_file() -> Path:
-    env = os.environ.get("DOCS_SESSION_FILE")
-    return Path(env) if env else session_file_path()
 
 
 def _base_url() -> str:
@@ -138,7 +133,7 @@ def _notify_macos(body: str) -> None:
 
 
 async def _run(timeout_s: float, headless: bool) -> int:
-    file = _session_file()
+    file = resolve_session_file()
     _stderr(f"Session file: {file}")
     if await _silent_probe(file):
         _stderr("Session still valid — no refresh needed.")

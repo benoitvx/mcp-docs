@@ -1,11 +1,37 @@
 """Shared test fixtures."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from mcp_docs.client import DocsClient
 from mcp_docs.config import DocsConfig
 
 BASE_URL = "https://docs.test.local"
+
+
+@pytest.fixture(autouse=True)
+def isolate_session_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the session file at a per-test temp path.
+
+    DocsClient reloads a file-backed cookie on 401, and the default location is
+    the developer's own XDG state dir. Without this, the suite would read (and
+    depend on) a real ProConnect cookie. The path deliberately does not exist
+    until a test writes it.
+    """
+    path = tmp_path / "session.json"
+    monkeypatch.setenv("DOCS_SESSION_FILE", str(path))
+    monkeypatch.delenv("DOCS_SESSION_COOKIE", raising=False)
+    return path
+
+
+def write_session_file(path: Path, cookie: str) -> None:
+    """Write a session file the way mcp-docs-refresh-session does."""
+    path.write_text(
+        json.dumps({"cookie": cookie, "obtained_at": "2026-08-14T09:46:48+00:00", "source": "test"}),
+        encoding="utf-8",
+    )
 
 
 def make_config(**overrides: object) -> DocsConfig:

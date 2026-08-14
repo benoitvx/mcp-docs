@@ -8,7 +8,13 @@ from typing import Any
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
-from mcp_docs.config import DocsConfig
+from mcp_docs.config import (
+    DocsConfig,
+    SessionFileError,
+    read_session_file,
+    resolve_session_file,
+    session_cookie_is_pinned,
+)
 from mcp_docs.exceptions import (
     DocsAPIError,
     DocsAuthError,
@@ -92,6 +98,63 @@ class DocsClient:
         )
         self._max_retries = config.max_retries
         self._semaphore = asyncio.Semaphore(config.max_concurrent)
+        # Tracked separately from the cookie jar: the API sends its own
+        # Set-Cookie for docs_sessionid, so the jar can hold several entries
+        # under that name and reading it back is ambiguous.
+        self._session_cookie = config.session_cookie if config.auth_mode == "session" else None
+        # Only a file-backed cookie can be picked up mid-flight; an explicit
+        # DOCS_SESSION_COOKIE is pinned by the operator and stays as-is.
+        self._session_file = (
+            resolve_session_file()
+            if config.auth_mode == "session" and not session_cookie_is_pinned()
+            else None
+        )
+
+    def _set_session_cookie(self, cookie: str) -> None:
+        """Make ``cookie`` the only docs_sessionid in the jar.
+
+        ``Cookies.set`` appends rather than replaces, and the server has usually
+        already added its own entry for this name under a different domain, so
+        setting without clearing first would stack duplicates and leave which
+        one gets sent up to cookie-precedence rules.
+        """
+        self._client.cookies.delete("docs_sessionid")
+        self._client.cookies.set("docs_sessionid", cookie)
+        self._session_cookie = cookie
+
+    def _reload_session_cookie(self) -> bool:
+        """Adopt a newer cookie written to the session file, if there is one.
+
+        ``mcp-docs-refresh-session`` rewrites the session file out-of-process, so a
+        long-lived server would otherwise keep replaying the cookie it read at
+        startup until restarted. Returns True only when the value actually
+        changed, which is what makes a retry worth attempting (and bounds it).
+        """
+        if self._session_file is None:
+            return False
+        try:
+            cookie = read_session_file(self._session_file)
+        except SessionFileError as e:
+            logger.warning("Could not reload session cookie: %s", e)
+            return False
+        if cookie == self._session_cookie:
+            return False
+        self._set_session_cookie(cookie)
+        logger.info("Adopted refreshed session cookie from %s", self._session_file)
+        return True
+
+    async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Send one request, transparently adopting a refreshed cookie on 401.
+
+        A 401 is rejected by the server before any side effect, and request
+        bodies here are plain bytes rather than consumed file objects, so the
+        single replay is safe for every verb — including multipart POSTs.
+        """
+        resp = await self._client.request(method, url, **kwargs)
+        if resp.status_code == 401 and self._reload_session_cookie():
+            resp = await self._client.request(method, url, **kwargs)
+        _raise_for_api_status(resp)
+        return resp
 
     async def _get(self, url: str, **kwargs: Any) -> Any:
         """Execute a GET request with retry and concurrency limiting.
@@ -106,37 +169,32 @@ class DocsClient:
                 reraise=True,
             ):
                 with attempt:
-                    resp = await self._client.get(url, **kwargs)
-                    _raise_for_api_status(resp)
+                    resp = await self._send("GET", url, **kwargs)
                     return resp.json()
         raise RuntimeError("Unreachable")  # pragma: no cover
 
     async def _post(self, url: str, **kwargs: Any) -> Any:
         """Execute a POST request with concurrency limiting (no retry)."""
         async with self._semaphore:
-            resp = await self._client.post(url, **kwargs)
-            _raise_for_api_status(resp)
+            resp = await self._send("POST", url, **kwargs)
             return resp.json()
 
     async def _patch(self, url: str, **kwargs: Any) -> Any:
         """Execute a PATCH request with concurrency limiting (no retry)."""
         async with self._semaphore:
-            resp = await self._client.patch(url, **kwargs)
-            _raise_for_api_status(resp)
+            resp = await self._send("PATCH", url, **kwargs)
             return resp.json()
 
     async def _put(self, url: str, **kwargs: Any) -> Any:
         """Execute a PUT request with concurrency limiting (no retry)."""
         async with self._semaphore:
-            resp = await self._client.put(url, **kwargs)
-            _raise_for_api_status(resp)
+            resp = await self._send("PUT", url, **kwargs)
             return resp.json()
 
     async def _delete(self, url: str, **kwargs: Any) -> None:
         """Execute a DELETE request with concurrency limiting (no retry)."""
         async with self._semaphore:
-            resp = await self._client.delete(url, **kwargs)
-            _raise_for_api_status(resp)
+            await self._send("DELETE", url, **kwargs)
 
     # --- Document operations ---
 
@@ -234,8 +292,7 @@ class DocsClient:
         temp_id = temp.id
         try:
             async with self._semaphore:
-                resp = await self._client.get(f"{_API_PREFIX}/documents/{temp_id}/content/")
-                _raise_for_api_status(resp)
+                resp = await self._send("GET", f"{_API_PREFIX}/documents/{temp_id}/content/")
                 content = resp.text
             if not content.strip():
                 logger.warning(
@@ -265,12 +322,12 @@ class DocsClient:
         """
         yjs_b64 = await self._markdown_to_yjs_base64(content)
         async with self._semaphore:
-            resp = await self._client.patch(
+            await self._send(
+                "PATCH",
                 f"{_API_PREFIX}/documents/{document_id}/content/",
                 json={"content": yjs_b64, "websocket": True},
                 headers=self._make_csrf_headers(),
             )
-            _raise_for_api_status(resp)
         return document_id
 
     async def search_documents(

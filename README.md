@@ -77,9 +77,22 @@ Les lancements suivants vérifient d'abord si le cookie existant est encore vali
 Override du chemin : `DOCS_SESSION_FILE=/autre/chemin.json uv run mcp-docs-refresh-session`.
 Timeout configurable : `uv run mcp-docs-refresh-session --timeout 600`.
 
+#### Prise en compte à chaud du cookie rafraîchi
+
+Le serveur MCP n'a pas besoin d'être redémarré après un refresh. Quand une requête revient en
+`401`, le client relit le fichier de session ; si le cookie sur disque a changé, il l'adopte et
+rejoue la requête une fois. Un `401` est rejeté avant tout effet de bord côté serveur, donc le
+rejeu est sûr y compris pour les écritures.
+
+Ce rechargement ne concerne que le cookie **lu depuis le fichier**. Si `DOCS_SESSION_COOKIE` est
+défini explicitement, il reste prioritaire et n'est jamais écrasé (même précédence qu'au
+démarrage).
+
 #### Rafraîchissement automatique (launchd, macOS)
 
 Pour ne plus jamais avoir à lancer la commande manuellement, planifier un run horaire en arrière-plan avec `launchd`. Le flag `--headless` fait tourner Chromium sans fenêtre ; si la session ProConnect IdP est encore vivante dans le profil persistant, le refresh est invisible. Si elle a expiré, le job échoue et une notification macOS s'affiche pour te signaler qu'il faut relancer en interactif.
+
+> `--extra browser` est indispensable dans le plist : sans lui, `uv run` résout l'environnement sans Playwright et le job échoue à l'import dès qu'un vrai refresh est nécessaire — sans se manifester tant que le fast-path suffit.
 
 Récupérer le chemin absolu de `uv` :
 
@@ -102,16 +115,11 @@ Créer `~/Library/LaunchAgents/mcp-docs.refresh.plist` (adapter `PATH_TO_UV` et 
         <string>run</string>
         <string>--directory</string>
         <string>PATH_TO_REPO</string>
+        <string>--extra</string>
+        <string>browser</string>
         <string>mcp-docs-refresh-session</string>
         <string>--headless</string>
     </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>UV_PROJECT_ENVIRONMENT</key>
-        <string>/tmp/venv-mcp-docs</string>
-        <key>UV_LINK_MODE</key>
-        <string>copy</string>
-    </dict>
     <key>StartInterval</key>
     <integer>3600</integer>
     <key>RunAtLoad</key>

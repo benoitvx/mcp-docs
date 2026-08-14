@@ -1,159 +1,106 @@
-# Todo — Prochaines étapes
+# Todo — Fix pérenne de l'expiration de session
 
-## 🎯 Tâche en cours — Diagnostic des erreurs API (logger les bodies)
+## Contexte
 
-**Symptôme** : 500 sur `docs_update_document_content` côté Claude Code (session Obsidian, 2026-05-05). Le tool renvoie `"Request failed (HTTP 500)."` sans aucun détail. Le body de réponse de l'API est jeté avant même d'être loggué — `client.py:_raise_for_api_status` ne lit pas `resp.text`. En plus, les `logger.warning(...)` actuels partent en stderr et **Claude Code ne capture pas le stderr** des subprocess MCP dans ses `.jsonl` (seul Claude Desktop le faisait).
+Le 14/08/2026, tous les tools `docs_*` renvoyaient `Authentication failed`. Deux causes
+distinctes, qui se cumulent :
 
-**Objectif** : surfacer le body API + méthode + URL dans un fichier de log persistant côté serveur, **sans** changer le message renvoyé au LLM (ANSSI : pas de leak d'internes).
+1. **Le cookie pourrit sans que rien ne le renouvelle.** Le plist launchd documenté dans le
+   README (section « Rafraîchissement automatique ») n'a jamais été installé. Dernier cookie
+   obtenu le 10/06/2026, expiré depuis ~2 mois.
+2. **Le serveur MCP ne voit pas un cookie rafraîchi.** `DocsClient.__init__` lit le cookie une
+   seule fois et le fige dans le jar httpx (`client.py:82`). Après un
+   `mcp-docs-refresh-session` réussi, le serveur continue d'envoyer l'ancien cookie jusqu'à
+   redémarrage complet — d'où le 401 persistant alors que `curl` avec le nouveau cookie
+   répond 200.
 
-- [x] `paths.py` : ajouter `log_file_path()` → `~/.local/state/mcp-docs/server.log` (XDG_STATE)
-- [x] `app.py` : `_configure_logging()` au boot, FileHandler dédié sur le logger `mcp_docs` (pas root, pas de doublon avec FastMCP)
-- [x] `exceptions.py` : champ optionnel `body: str | None` dans `DocsAPIError` + sous-classes (default None)
-- [x] `client.py` `_raise_for_api_status` : tronquer `resp.text` à 1KB, logger `method URL → status` + body, passer le body dans l'exception
-- [x] `tools.py` `_error_response` : log enrichi (`status / body`) — message user-facing inchangé
-- [x] Vérifier `tests/test_tools.py:296` (assert `"Request failed (HTTP 500)"`) — doit passer sans modif
-- [x] Reproduction du 500 → log surface `keys=[...]` sans `content` → cause identifiée
+Corriger (1) seul laisse une fenêtre où il faut redémarrer le serveur à la main.
+Corriger (2) seul ne renouvelle toujours rien. Il faut les deux.
 
-### Diagnostic
+## Plan
 
-Pas de bug Y-Provider. Refactor délibéré côté backend Docs ([PR suitenumerique/docs#2171](https://github.com/suitenumerique/docs/pull/2171), v5.0.0, mergée 2026-04-27) : le champ `content` a été retiré du serializer `GET /documents/{id}/` pour éviter de fetch S3 sur chaque metadata. La lecture/écriture du contenu vit maintenant sur des routes dédiées :
+### A. Hot-reload du cookie sur 401 (code)
 
-- `GET /documents/{id}/content/` (no params) → stream Yjs base64 brut en `text/plain` (avec ETag)
-- `PATCH /documents/{id}/content/` `{"content": "<b64>", "websocket": <bool>}` → `204 No Content`
-- `GET /documents/{id}/formatted-content/?content_format=…` → ancien `/content/?content_format=…` renommé
+- [ ] Exposer `resolve_session_file()` dans `config.py` (aujourd'hui `_resolve_session_file`),
+      et supprimer le doublon `_session_file()` de `session_refresh.py`
+- [ ] `DocsClient` : mémoriser le chemin du fichier de session, uniquement quand il est
+      « rechargeable » — mode `session` **et** `DOCS_SESSION_COOKIE` non défini (l'env explicite
+      reste prioritaire, conformément à la précédence documentée dans `load_config`)
+- [ ] Ajouter `_reload_session_cookie() -> bool` : relit le fichier, met à jour le jar httpx,
+      renvoie `True` seulement si la valeur a réellement changé (évite toute boucle)
+- [ ] Factoriser `_get/_post/_patch/_put/_delete` sur un `_send(method, url, **kwargs)` commun
+      qui, sur HTTP 401, tente le reload puis rejoue la requête **une seule fois**
+- [ ] Vérifier que le rejeu est sûr : un 401 est rejeté avant tout effet de bord, et les corps
+      multipart sont des `bytes` (pas des file objects consommés) → rejouable
 
-Confirmé empiriquement par curl côté prod (2026-05-05).
+### B. Rafraîchissement automatique (infra)
 
-### Patch appliqué
+- [ ] Générer `~/Library/LaunchAgents/mcp-docs.refresh.plist` à partir du modèle README,
+      avec les chemins absolus réels (`which uv`, chemin du repo)
+- [ ] `launchctl load` + vérifier que le job apparaît dans `launchctl list`
+- [ ] Déclencher un run immédiat (`launchctl kickstart`) et confirmer via les logs
+      que le fast-path « Session still valid » est bien pris
 
-- [x] `client.py` `get_document_content` → migre vers `/formatted-content/`
-- [x] `client.py` `_markdown_to_yjs_base64` → lit le Yjs base64 sur `/documents/{temp_id}/content/` (`text/plain`) au lieu du JSON detail
-- [x] `client.py` `update_document_content` → PATCH sur `/documents/{id}/content/`, retourne `str` (id) au lieu de `DocumentSummary` (l'endpoint renvoie `204`)
-- [x] `tools.py` `docs_update_document_content` → consomme le nouveau type de retour
-- [x] Tests adaptés (mocks respx : URLs et response types)
-- [x] `CLAUDE.md` § Endpoints — section markdown/yjs/PATCH refresh
-- [x] `ruff check` ✅ / `pyright` ✅ / `pytest` ✅ (180 tests)
-- [ ] **À tester côté Mac** : redémarrer la session MCP (sync nouvelle version `mcp-docs`), refaire l'update qui 500 — doit passer maintenant
+### C. Tests & vérif
 
----
+- [ ] Test respx : 401 puis 200 après réécriture du fichier de session → la requête aboutit
+- [ ] Test respx : 401 persistant → une seule tentative de reload, l'erreur remonte
+- [ ] Test : mode `DOCS_SESSION_COOKIE` (env) → aucun reload tenté
+- [ ] `uv run pytest`, `uv run ruff check .`, `uv run pyright` au vert
+- [ ] Reconnecter le MCP et valider `docs_get_me` en conditions réelles
 
-## ✅ Fait — Restreindre `docs_delete_document` au créateur
+### D. Doc
 
-- [x] Étendre `DocumentSummary` avec un champ `creator: str | dict | None`
-- [x] Ajouter `DocsClient.get_document(document_id)` (GET `/documents/{id}/`)
-- [x] Modifier `docs_delete_document` : 2 GET (document + me) puis comparer `creator`/`me.id` avant DELETE
-- [x] Fixtures de test (`SAMPLE_DOCUMENT_DETAIL`, `SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR`)
-- [x] Tests tools (succès créateur, succès dict, refus non-créateur, refus creator manquant, 404)
-- [x] Tests client pour `get_document`
-- [x] Mise à jour CLAUDE.md (table tools + endpoint)
-- [x] `uv run ruff check . && uv run pyright && uv run pytest` (180 tests OK, lint/pyright clean)
+- [ ] README : documenter le hot-reload (plus besoin de redémarrer le serveur après refresh)
+- [ ] CLAUDE.md : noter le comportement dans la section Configuration
+- [ ] `tasks/lessons.md` : ajouter le pattern « credential figé à la construction du client »
 
-### Résultat
+## Limite connue (à assumer)
 
-`docs_delete_document` refuse désormais toute suppression d'un document dont l'utilisateur authentifié n'est pas le créateur. Mécanique : avant le `DELETE`, le tool fait `GET /documents/{id}/` puis `GET /users/me/`, extrait `creator` (str ou `{"id": ...}`) et compare avec `me.id`. Si pas de match (ou `creator` absent), retour `"Error: you can only delete documents you created."` sans appel `DELETE`. La couche transport (session/CSRF aujourd'hui, OIDC plus tard) n'est pas affectée.
+Le refresh headless ne marche que tant que la session SSO ProConnect vit encore dans le profil
+Chromium persistant. Quand elle meurt pour de bon, une ré-authentification interactive reste
+nécessaire — c'est le rôle de la notification macOS déjà implémentée dans `session_refresh.py`.
+Ce plan réduit la fréquence des interventions manuelles, il ne les supprime pas. La vraie
+suppression, c'est la migration OIDC vers `/external_api/v1.0/`.
 
-Fichiers modifiés : `src/mcp_docs/models.py`, `src/mcp_docs/client.py`, `src/mcp_docs/tools.py`, `tests/conftest.py`, `tests/test_tools.py`, `tests/test_client.py`, `CLAUDE.md`.
+## Résultat
 
-Test E2E (Claude Desktop, 2026-04-27) ✅ :
-- Création + suppression d'un doc créé par soi → corbeille OK.
-- Suppression d'un doc partagé ("tonton du bled", non-créateur) → refus client-side, pas de DELETE.
-- UUID `00000000-…` (placeholder renvoyé par le backend Docs au lieu d'un 404) → également refusé. Défense en profondeur confirmée.
+Tout le plan est fait. 189 tests au vert (180 avant → +9), ruff clean.
 
----
+**A. Hot-reload** — `DocsClient._send` centralise les cinq verbes HTTP, relit le fichier de
+session sur 401 et rejoue une fois si le cookie a changé. Les deux appels qui contournaient les
+helpers (`_markdown_to_yjs_base64`, `update_document_content`) passent aussi par `_send`, donc
+bénéficient du rechargement. `resolve_session_file()` est mutualisée entre `config.py` et
+`session_refresh.py` (le doublon `_session_file()` a disparu).
 
-## ✅ Fait
+**Bug trouvé par le test end-to-end, invisible en unitaire** : l'API renvoie son propre
+`Set-Cookie: docs_sessionid`, donc le jar httpx contient plusieurs cookies homonymes et
+`cookies.get("docs_sessionid")` lève `CookieConflict`. Le client suit désormais sa propre valeur
+dans `self._session_cookie` au lieu de relire le jar, et `_set_session_cookie` purge les
+doublons avant d'écrire. Test de régression ajouté.
 
-### Fondations
-- [x] Config Pydantic Settings (`DocsConfig`) — remplace `os.environ.get()` éparpillés, validation `env_prefix=DOCS_`, contraintes sur retries/concurrent
-- [x] Modèles Pydantic typés (`DocumentSummary`, `DocumentContent`, `PaginatedResponse[T]`, `UserInfo`, `DocumentAccess`, `Invitation`) — fini les `dict` bruts
-- [x] Hiérarchie d'exceptions (`DocsAPIError` + `DocsAuthError` / `DocsPermissionError` / `DocsNotFoundError` / `DocsValidationError` / `DocsRateLimitError`) avec mapping HTTP auto
-- [x] Retry logic — tenacity, retry sur 429/502/503/timeout, exponential backoff
-- [x] Rate limiting — `asyncio.Semaphore`, max 5 requêtes concurrentes
-- [x] CLI `--config-check` pour valider config + auth sans lancer le serveur MCP
-- [x] MCP Resources (`docs://user`, `docs://documents`)
+**B. launchd** — `~/Library/LaunchAgents/mcp-docs.refresh.plist` installé et chargé
+(`launchctl list` → exit 0, fast-path « Session still valid »). Le modèle du README était
+incomplet : sans `--extra browser`, `uv run` résout un environnement sans Playwright et le job
+n'échoue qu'au premier vrai refresh. Corrigé dans le README. `UV_PROJECT_ENVIRONMENT=/tmp/...`
+retiré : `~/Documents` n'est pas synchronisé iCloud ici, le `.venv` du repo convient.
 
-### Tools CRUD & recherche
-- [x] `docs_list_documents` — liste paginée
-- [x] `docs_get_document_content` — markdown / html / json
-- [x] `docs_create_document` — depuis markdown (multipart, conversion backend)
-- [x] `docs_search_documents` — par titre ou contenu
-- [x] `docs_get_me` — infos user authentifié
-- [x] `docs_list_children` — sous-documents
+**C. Tests** — 9 tests couvrant : adoption + rejeu, rejeu unique (pas de boucle), cookie
+inchangé, fichier absent, fichier malformé, cookie épinglé par l'env, mode OIDC, POST multipart,
+et le cas `Set-Cookie` dupliqué. Vérifiés par mutation : les 4 tests qui portent sur le
+rechargement échouent bien si on le désactive.
 
-### Tools édition
-- [x] `docs_update_document_title` — renommer (PATCH JSON)
-- [x] `docs_update_document_content` — **avec markdown formaté** via trick temp-doc + transplant Yjs (pas besoin de pycrdt côté client)
-- [x] `docs_delete_document` — soft delete (corbeille)
+**Validation réelle** — client construit avec un cookie périmé + fichier de session valide →
+`401` → `Adopted refreshed session cookie` → `get_me()` et `get_document_content()` réussissent
+contre l'API de production.
 
-### Tools accès/permissions
-- [x] `docs_list_accesses`, `docs_grant_access`, `docs_update_access`, `docs_revoke_access`
-- [x] `docs_list_invitations`, `docs_create_invitation`
+### Reste à faire côté utilisateur
 
-### Tools IA (natifs Docs)
-- [x] `docs_ai_transform` — correct, rephrase, summarize, beautify, emojify, prompt
-- [x] `docs_ai_translate` — ISO language code
+Reconnecter le serveur MCP (`/mcp` en terminal interactif, ou relancer l'app) : le process en
+cours tourne encore sur l'ancien code **et** l'ancien cookie. C'est la dernière fois que ce
+redémarrage manuel est nécessaire.
 
-### Tools partage par lien
-- [x] `docs_update_link_configuration` — restricted / authenticated / public + rôle
+### Hors périmètre, repéré au passage
 
-### Tools favoris & organisation
-- [x] `docs_list_favorites`, `docs_add_favorite`, `docs_remove_favorite`
-- [x] `docs_move_document` — positions first-child/last-child/left/right/siblings
-- [x] `docs_duplicate_document` — avec/sans descendants + accesses
-- [x] `docs_list_trashbin`, `docs_restore_document`
-
-### Qualité & CI
-- [x] 175 tests (lint + pyright + pytest + pip-audit + gitleaks en CI)
-- [x] Fix CVE-2026-40347 (python-multipart bumped à 0.0.26)
-- [x] README complet avec les 25 tools, 4 workflows, architecture, sécurité ANSSI
-- [x] Évaluations MCP — `evaluation.xml` avec 10 Q&A pairs (placeholders à remplir)
-
-### Cookie session — rotation automatisée (avril 2026)
-- [x] Module `paths.py` — résolution XDG (`~/.local/state/mcp-docs/session.json`, profil Chromium sous `~/.local/share/mcp-docs/browser-profile/`)
-- [x] `load_config()` + `read_session_file()` dans `config.py` — précédence `DOCS_SESSION_COOKIE` > `DOCS_SESSION_FILE` > défaut XDG, `model_validator` reste pur
-- [x] CLI `mcp-docs-refresh-session` — fast-path HTTP (probe `/users/me/`) + fallback Playwright avec profil persistant, écriture atomique `0600`
-- [x] Flag `--headless` + notification macOS `osascript` sur échec (runs planifiés)
-- [x] Extra optionnel `[browser]` pour Playwright (pas imposé aux autres users)
-- [x] 14 nouveaux tests (`tests/test_session_file.py`) — parsing + précédence
-- [x] Plist launchd horaire documenté dans README, activable en 3 commandes `launchctl`
-- [x] README « Rotation des secrets » mis à jour, bloc Claude Desktop nettoyé (plus de cookie en dur)
-
----
-
-## 🚧 À faire
-
-### P0 — Migration auth OIDC
-- [ ] Migrer le client vers `/external_api/v1.0/` avec auth OIDC Bearer token
-- [ ] Intégrer ProConnect (authorization_code flow) pour obtenir le token
-- [ ] Supprimer le hack CSRF (plus nécessaire avec Bearer token)
-- [ ] Mettre à jour les tests et la doc
-
-Ref : issue [suitenumerique/docs#1703](https://github.com/suitenumerique/docs/issues/1703), PR [#1923](https://github.com/suitenumerique/docs/pull/1923)
-
-Bloqué : attendre le token exchange côté La Suite (@jmaupetit).
-
-### P1 — Distribution
-- [ ] Publier sur PyPI (`pip install mcp-docs` ou `uvx mcp-docs`)
-- [ ] Workflow GitHub Actions pour release auto (tag → build → publish)
-- [ ] Documentation installation via PyPI dans le README
-
-### P2 — Robustesse & gouvernance
-- [ ] Remplir les placeholders dans `evaluation.xml` avec un compte de test stable
-- [ ] Ajouter le pre-commit hook gitleaks (`uv run pre-commit install` documenté mais à vérifier sur CI)
-- [ ] Configurer le repo GitHub (branch protection) — nécessite GitHub Pro ou repo public
-- [ ] Ajouter des évals pour les nouveaux tools (IA, partage, organisation)
-
-### P3 — Fonctionnalités additionnelles
-- [ ] `docs_upload_attachment` — upload de fichiers/images (endpoint `/attachment-upload/`)
-- [ ] `docs_list_versions` + `docs_get_version` — historique du document
-- [ ] `docs_comment` / `docs_list_threads` — collaboration asynchrone
-- [ ] `docs_ask_for_access` — demander l'accès à un doc (workflow utilisateur)
-
----
-
-## Notes
-
-- **Markdown update sans pycrdt** : on exploite le convertisseur backend en créant un doc temporaire, en récupérant son Yjs pré-converti, et en le transplantant sur le doc cible. Pas de parser markdown → BlockNote côté client nécessaire. Coût : 4 appels API par update au lieu d'1.
-- **Auth session + CSRF** : hack temporaire. Le CSRF token est généré côté client (64 chars hex via `secrets.token_hex(32)`), injecté en cookie + header `X-CSRFToken` + `Referer`. Partira avec la migration OIDC.
-- **Rotation cookie via Playwright** : palier intermédiaire en attendant l'OIDC. Évite le DataPass ProConnect (4 rôles + 5j ouvrés) trop lourd pour un outil mono-utilisateur. Profil Chromium persistant → la session ProConnect IdP est réutilisée → refresh silencieux dans 99% des cas. Notifications macOS quand la re-MFA est requise.
-- **Tools non-idempotents marqués destructive=True** : delete, revoke_access, update_access, remove_favorite, move, update_link_configuration.
+`session_refresh.py:114` — erreur pyright pré-existante (`c["value"]` sur un TypedDict où
+`value` n'est pas requis), identique sur `main`. Non touchée.

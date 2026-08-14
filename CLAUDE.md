@@ -329,6 +329,8 @@ uv run mcp-docs-refresh-session
 
 Le CLI `mcp-docs-refresh-session` lance un Chromium persistant, attend la connexion ProConnect, puis écrit le cookie dans `DOCS_SESSION_FILE` (ou le chemin XDG par défaut). Les runs suivants utilisent un fast-path (probe HTTP sur `/users/me/`, pas de navigateur) si le cookie est encore valide. Précédence : `DOCS_SESSION_COOKIE` > `DOCS_SESSION_FILE` > défaut XDG.
 
+**Prise en compte à chaud** : `DocsClient._send` relit le fichier de session sur `401` et rejoue la requête une fois si le cookie a changé (`client.py`). Le serveur MCP n'a donc plus besoin d'être redémarré après un refresh. Le rechargement est désactivé quand `DOCS_SESSION_COOKIE` est défini (l'env explicite reste prioritaire) et en mode `oidc`.
+
 **Automation (macOS)** : la commande accepte `--headless` pour un rafraîchissement sans fenêtre, destiné à un job planifié. Un plist launchd horaire (documenté dans le README section « Rafraîchissement automatique ») fait tourner ça en arrière-plan ; si la re-authentification ProConnect devient nécessaire, une notification macOS native prévient l'utilisateur de relancer en interactif. Logs : `/tmp/mcp-docs-refresh.err.log`.
 
 ---

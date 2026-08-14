@@ -1,6 +1,7 @@
 """Unit tests for DocsClient."""
 
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
@@ -20,6 +21,7 @@ from .conftest import (
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
     make_config,
+    write_session_file,
 )
 
 API = f"{BASE_URL}/api/v1.0"
@@ -510,3 +512,145 @@ class TestExceptionMapping:
         respx.get(f"{API}/users/me/").mock(return_value=Response(500))
         with pytest.raises(DocsAPIError):
             await docs_client_session.get_me()
+
+
+# --- Session cookie hot-reload ---
+
+
+class TestSessionCookieHotReload:
+    """A cookie refreshed on disk must be adopted without restarting the server."""
+
+    @respx.mock
+    async def test_401_adopts_refreshed_cookie_and_retries(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        write_session_file(isolate_session_file, "fresh-cookie")
+        route = respx.get(f"{API}/users/me/").mock(
+            side_effect=[Response(401), Response(200, json=SAMPLE_USER)]
+        )
+
+        result = await docs_client_session.get_me()
+
+        assert result.email == SAMPLE_USER["email"]
+        assert route.call_count == 2
+        assert "test-session-id" in route.calls[0].request.headers["cookie"]
+        assert "fresh-cookie" in route.calls[1].request.headers["cookie"]
+
+    @respx.mock
+    async def test_retries_only_once_when_refreshed_cookie_also_rejected(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        write_session_file(isolate_session_file, "fresh-but-invalid")
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await docs_client_session.get_me()
+
+        assert route.call_count == 2  # original + single replay, no loop
+
+    @respx.mock
+    async def test_no_retry_when_file_cookie_is_unchanged(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        write_session_file(isolate_session_file, "test-session-id")  # same as configured
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await docs_client_session.get_me()
+
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_no_retry_when_session_file_is_absent(
+        self, docs_client_session: DocsClient
+    ) -> None:
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await docs_client_session.get_me()
+
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_malformed_session_file_does_not_break_the_request(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        isolate_session_file.write_text("{ not json", encoding="utf-8")
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await docs_client_session.get_me()
+
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_env_pinned_cookie_is_never_reloaded(
+        self, isolate_session_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit DOCS_SESSION_COOKIE outranks the file, so it must stay put."""
+        monkeypatch.setenv("DOCS_SESSION_COOKIE", "pinned-cookie")
+        write_session_file(isolate_session_file, "fresh-cookie")
+        client = DocsClient(make_config(session_cookie="pinned-cookie"))
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await client.get_me()
+
+        assert route.call_count == 1
+        assert "pinned-cookie" in route.calls[0].request.headers["cookie"]
+
+    @respx.mock
+    async def test_oidc_mode_never_touches_the_session_file(
+        self, docs_client_oidc: DocsClient, isolate_session_file: Path
+    ) -> None:
+        write_session_file(isolate_session_file, "fresh-cookie")
+        route = respx.get(f"{API}/users/me/").mock(return_value=Response(401))
+
+        with pytest.raises(DocsAuthError):
+            await docs_client_oidc.get_me()
+
+        assert route.call_count == 1
+
+    @respx.mock
+    async def test_hot_reload_applies_to_write_verbs(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        """POST carries a multipart body — the replay must resend it intact."""
+        write_session_file(isolate_session_file, "fresh-cookie")
+        route = respx.post(f"{API}/documents/").mock(
+            side_effect=[Response(401), Response(201, json=SAMPLE_CREATED)]
+        )
+
+        result = await docs_client_session.create_document("# Hello", title="Doc")
+
+        assert result.id == SAMPLE_CREATED["id"]
+        assert route.call_count == 2
+        assert b"# Hello" in route.calls[1].request.content
+
+    @respx.mock
+    async def test_reload_survives_server_set_cookie_of_same_name(
+        self, docs_client_session: DocsClient, isolate_session_file: Path
+    ) -> None:
+        """The API sets its own docs_sessionid, so the jar holds duplicates.
+
+        Reading the cookie back out of the jar raises CookieConflict in that
+        state — the client must compare against its own tracked value instead.
+        """
+        write_session_file(isolate_session_file, "fresh-cookie")
+        route = respx.get(f"{API}/users/me/").mock(
+            side_effect=[
+                Response(
+                    401,
+                    headers={"Set-Cookie": "docs_sessionid=server-issued; Domain=docs.test.local; Path=/"},
+                ),
+                Response(200, json=SAMPLE_USER),
+            ]
+        )
+
+        result = await docs_client_session.get_me()
+
+        assert result.email == SAMPLE_USER["email"]
+        assert route.call_count == 2
+        sent = route.calls[1].request.headers["cookie"]
+        assert "fresh-cookie" in sent
+        assert "server-issued" not in sent

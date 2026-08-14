@@ -67,10 +67,20 @@ def read_session_file(path: Path) -> str:
     return cookie
 
 
-def _resolve_session_file() -> Path:
+def resolve_session_file() -> Path:
     """Return the user-chosen session file path, or the XDG default."""
     env_value = os.environ.get("DOCS_SESSION_FILE")
     return Path(env_value) if env_value else session_file_path()
+
+
+def session_cookie_is_pinned() -> bool:
+    """Return True when the cookie comes from the env var rather than the session file.
+
+    An explicit ``DOCS_SESSION_COOKIE`` wins over the file (see ``load_config``),
+    so in that case the running client must not reload the file behind the
+    operator's back.
+    """
+    return bool(os.environ.get("DOCS_SESSION_COOKIE"))
 
 
 def load_config() -> DocsConfig:
@@ -82,8 +92,8 @@ def load_config() -> DocsConfig:
     Anything else (missing file, malformed file) surfaces a clear error.
     """
     auth_mode = os.environ.get("DOCS_AUTH_MODE", "session")
-    if auth_mode == "session" and not os.environ.get("DOCS_SESSION_COOKIE"):
-        candidate = _resolve_session_file()
+    if auth_mode == "session" and not session_cookie_is_pinned():
+        candidate = resolve_session_file()
         if candidate.exists():
             return DocsConfig(session_cookie=read_session_file(candidate))
     return DocsConfig()
