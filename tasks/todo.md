@@ -1762,4 +1762,40 @@ Consigner dans `tasks/lessons.md` tout écart entre le comportement observé et 
 
 ## Résultat
 
-_À compléter en fin d'implémentation._
+Livré le 2026-08-14. 8 commits, **256 tests verts**, ruff propre, pyright propre sur le code
+ajouté.
+
+| Module | Rôle |
+|--------|------|
+| `src/mcp_docs/sync.py` | Découverte récursive, disposition folder note, classement, écriture, wikilinks |
+| `src/mcp_docs/vault.py` | Nommage, frontmatter ligne à ligne, écriture atomique, garde-fou de chemin |
+| `src/mcp_docs/tools_sync.py` | Tool MCP `docs_sync_tree` |
+
+### Vérification sur l'arbre réel (Hub, 129 documents, profondeur 5)
+
+```
+dry-run    : 129 parcourus, 129 créés, 0 erreur, 7,4 s — rien écrit
+passage 1  : 129 fichiers écrits, 0 erreur, 16,0 s
+passage 2  : 129 inchangés, 0 création, 0 écriture, 9,6 s → idempotent
+```
+
+Confinement vérifié après écriture : seuls les 129 fichiers sous `Docs/` ont été créés. Hors
+`Docs/`, un seul fichier a changé — `.obsidian/workspace.json`, réécrit par Obsidian lui-même
+en réindexant.
+
+### Écarts par rapport au plan
+
+- Deux tests écrits avec `route.called` échouaient à tort : respx réutilise l'objet `Route`
+  d'un motif déjà enregistré. Corrigés en comparant des deltas de `call_count`.
+- `resolve_within` a dû accepter `PurePath` et non `str | Path` : `plan_layout` produit des
+  `PurePosixPath`.
+- Le second passage a d'abord échoué sur un `429` — deux arbres complets enchaînés dépassent
+  le plafond de l'API. Voir `lessons.md`.
+
+### Reste à faire
+
+- Ajouter `DOCS_VAULT_PATH` à `claude_desktop_config.json` et redémarrer l'app, pour que le
+  tool soit appelable depuis une conversation.
+- Corriger l'erreur pyright préexistante de `session_refresh.py:114` (hors périmètre, mais
+  bloque la CI et donc la PR).
+- Ouvrir la PR.

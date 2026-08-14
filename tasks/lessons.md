@@ -42,3 +42,33 @@ en conditionnant le rejeu au fait que la valeur a réellement changé — ça bo
 tourne. Et tester la commande du plist en env minimal (`env -i HOME=... PATH=/usr/bin:/bin`)
 avant de l'installer — un `uv run` sans `--extra browser` résout un environnement sans
 Playwright et n'échoue qu'au moment où un vrai refresh devient nécessaire.
+
+## `/documents/{id}/tree/` n'est pas récursif
+
+**Erreur** : conçu une découverte d'arbre en un appel, en croyant que `/tree/` renvoyait le
+sous-arbre complet du document demandé.
+**Cause** : `/tree/` renvoie l'arbre de la **racine ancestrale**, avec seulement le chemin vers
+le document demandé déplié. Les nœuds frères arrivent avec `children: []` alors que leur
+`numchild` est non nul — c'est le endpoint qui alimente la sidebar, pas un dump d'arbre.
+Le premier test semblait valider l'hypothèse par coïncidence : sur un document à 52 enfants
+directs et 0 petit-enfant, les 53 nœuds renvoyés correspondaient à l'arbre complet.
+**Règle** : vérifier une hypothèse de récursivité sur un arbre d'au moins 3 niveaux. Ici la
+découverte se fait avec `/children/`, niveau par niveau. `/descendants/` renvoie 404 en prod
+malgré `abilities.descendants: true`, et la liste plate `/documents/` ne contient que les
+documents à accès direct — ni l'un ni l'autre ne remplace la descente récursive.
+
+## respx réutilise le même objet Route pour un motif déjà enregistré
+
+**Erreur** : deux tests asseyant `assert not route.called` échouaient alors que le code était
+correct — ils réenregistraient les routes entre deux exécutions de la fonction testée.
+**Cause** : `respx.get(...).mock(...)` sur un motif déjà connu renvoie l'objet `Route`
+existant. Son compteur d'appels garde donc les appels du premier passage.
+**Règle** : dans un test qui exécute deux fois le même flux, comparer un delta de
+`route.call_count` plutôt qu'un booléen `route.called`.
+
+## Rate limit de l'API Docs sur une sync d'arbre
+
+**Erreur** : enchaîner deux synchronisations complètes de 129 documents (~300 requêtes en
+20 s) déclenche un `429` que les 3 retries du client n'absorbent pas.
+**Règle** : une sync d'arbre est proche du plafond. Espacer les racines dans une routine qui
+en synchronise plusieurs, plutôt que de les lancer en rafale.
