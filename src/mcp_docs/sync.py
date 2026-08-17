@@ -198,6 +198,33 @@ def _record(report: SyncReport, change: Change) -> None:
         report.changes_truncated = True
 
 
+def _owned_folder(
+    destination_dir: Path, tree: TreeNode, layout: dict[str, PurePosixPath]
+) -> Path | None:
+    """The directory this run lays its tree out in, or None when it writes a single file.
+
+    Only notes under this folder are considered part of the mirror being written:
+    they follow the layout (so renames and reparenting move them), and they are
+    the only ones that can be reported as orphans. A childless root owns no
+    folder — it would otherwise claim the whole destination.
+    """
+    if not tree.children:
+        return None
+    return resolve_within(destination_dir, layout[tree.id]).parent
+
+
+def _target_for(
+    current: Path | None,
+    destination_dir: Path,
+    relative: PurePosixPath,
+    owned: Path | None,
+) -> Path:
+    """Where a document's note belongs: in place if it already lives outside this run."""
+    if current is not None and (owned is None or not current.is_relative_to(owned)):
+        return current
+    return resolve_within(destination_dir, relative)
+
+
 def _recorded_updated_at(path: Path) -> str | None:
     """Read the ``docs_updated_at`` the last sync wrote into a note."""
     try:
@@ -214,11 +241,16 @@ async def sync_tree(
     document: str,
     dry_run: bool = False,
 ) -> SyncReport:
-    """Mirror the tree rooted at ``document`` into ``vault_root / destination``.
+    """Mirror the tree rooted at ``document`` into the vault.
 
     Discovery never downloads content: whether a document must be re-fetched is
     decided by comparing the server's ``updated_at`` with the one recorded in
     the local note's frontmatter. Only documents that actually moved are read.
+
+    ``destination`` decides where documents that have *no* note yet are created.
+    A document already mirrored somewhere else in the vault is refreshed where it
+    lives, so asking to sync one document does not clone the copy it already has
+    inside a larger tree.
     """
     root_id = parse_document_ref(document)
     tree = await discover_tree(client, root_id)
@@ -228,19 +260,23 @@ async def sync_tree(
 
     vault = vault_root.resolve()
     destination_dir = resolve_within(vault, destination)
-    index = index_vault(destination_dir)
+    index = index_vault(vault)
+    owned = _owned_folder(destination_dir, tree, layout)
+    targets = {
+        doc_id: _target_for(index.get(doc_id), destination_dir, relative, owned)
+        for doc_id, relative in layout.items()
+    }
 
     report = SyncReport(
         root_title=tree.title,
-        destination=str(resolve_within(destination_dir, layout[tree.id]).parent.relative_to(vault)),
+        destination=str(targets[tree.id].parent.relative_to(vault)),
         dry_run=dry_run,
         scanned=len(nodes),
     )
 
     pending: list[tuple[TreeNode, Path, Path | None, bool]] = []
-    for doc_id, relative in layout.items():
+    for doc_id, target in targets.items():
         node = nodes[doc_id]
-        target = resolve_within(destination_dir, relative)
         current = index.get(doc_id)
         moved = current is not None and current != target
         stale = current is None or _recorded_updated_at(current) != node.updated_at
@@ -270,15 +306,18 @@ async def sync_tree(
         )
         pending.append((node, target, current, stale))
 
-    for doc_id, path in index.items():
-        if doc_id not in layout:
-            report.orphans.append(
-                {
-                    "document_id": doc_id,
-                    "title": path.stem,
-                    "path": str(path.relative_to(vault)),
-                }
-            )
+    # Orphans are only meaningful inside the folder this run owns; notes belonging
+    # to another mirror elsewhere in the vault are none of this run's business.
+    if owned is not None:
+        for doc_id, path in index.items():
+            if doc_id not in layout and path.is_relative_to(owned):
+                report.orphans.append(
+                    {
+                        "document_id": doc_id,
+                        "title": path.stem,
+                        "path": str(path.relative_to(vault)),
+                    }
+                )
 
     if dry_run:
         return report

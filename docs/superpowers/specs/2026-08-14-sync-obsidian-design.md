@@ -134,8 +134,19 @@ déterministe d'une exécution à l'autre.
    Pour chaque nœud : chemin relatif, selon la règle folder note et l'assainissement.
 
 4. Indexer l'existant
-   Parcours des .md sous la destination, lecture du frontmatter, index docs_id → chemin.
+   Parcours des .md de tout le vault, lecture du frontmatter, index docs_id → chemin.
    Un fichier sans docs_id est une note personnelle : ignoré, jamais touché.
+
+   L'index couvre le vault entier, pas la seule destination : un document déjà miroité
+   ailleurs (typiquement dans un arbre plus large synchronisé auparavant) doit être
+   rafraîchi là où il vit, et non dupliqué sous la destination demandée. `destination` ne
+   décide donc que du placement des documents encore absents.
+
+   Corollaire : le dossier « possédé » par l'exécution — celui qui contient la note de la
+   racine — délimite ce qui suit la disposition calculée. Une note à l'intérieur suit le
+   layout (renommages et reparentages la déplacent) ; une note à l'extérieur est mise à jour
+   sur place. Une racine sans enfant ne possède aucun dossier, sans quoi elle revendiquerait
+   toute la destination.
 
 5. Classer chaque nœud
    absent de l'index                          → CRÉÉ     (télécharger, écrire)
@@ -145,7 +156,9 @@ déterministe d'une exécution à l'autre.
    présent, docs_updated_at différent         → MIS À JOUR (télécharger, réécrire)
 
 6. Détecter les orphelins
-   Fichier indexé dont le docs_id n'est plus dans l'arbre : signalé, jamais touché.
+   Fichier indexé, situé dans le dossier possédé par l'exécution, dont le docs_id n'est plus
+   dans l'arbre : signalé, jamais touché. Les notes d'un autre miroir ailleurs dans le vault
+   ne regardent pas cette exécution.
 
 7. Écrire
    Téléchargements parallélisés sous le sémaphore du client.

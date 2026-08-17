@@ -59,17 +59,19 @@ async def docs_sync_tree(
 ) -> str:
     """Mirror a Docs document and all its sub-documents into the local Obsidian vault.
 
-    Only documents whose server-side update time differs from the one recorded
-    in the local note are downloaded, so a routine run is cheap. Notes are
-    written as folder notes: a document becomes a directory only when it has
-    children. Files that are no longer part of the tree are reported as orphans
-    and never deleted, and notes without a docs_id are never touched. Images stay
-    as authenticated URLs and will not render in Obsidian.
+    Only documents whose server-side update time differs from the one recorded in
+    the local note are downloaded, so a routine run is cheap. A document that is
+    already mirrored somewhere in the vault is refreshed where it lives, even if
+    that is inside a larger tree synced earlier — syncing one document never
+    clones a copy it already has. Notes are written as folder notes: a document
+    becomes a directory only when it has children. Files no longer part of the
+    tree are reported as orphans and never deleted, notes without a docs_id are
+    never touched, and images stay as authenticated URLs that will not render.
 
     Args:
         document: Docs URL of the parent document, or its UUID.
-        destination: Parent folder inside the vault. The tree is written to
-            "<destination>/<root title>/". Defaults to "Docs".
+        destination: Where documents that have no note yet are created. The tree
+            goes to "<destination>/<root title>/". Defaults to "Docs".
         dry_run: Report what would change without downloading or writing anything.
     """
     if not document or not document.strip():

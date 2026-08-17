@@ -332,8 +332,13 @@ symboliques compris.
 | Paramètre | Défaut | Rôle |
 |-----------|--------|------|
 | `document` | — | URL Docs du document parent, ou son UUID |
-| `destination` | `Docs` | Dossier parent dans le vault. L'arbre va dans `<destination>/<titre de la racine>/` |
+| `destination` | `Docs` | Où sont créés les documents qui n'ont pas encore de note. L'arbre va dans `<destination>/<titre de la racine>/` |
 | `dry_run` | `false` | Calcule et renvoie le plan sans rien télécharger ni écrire |
+
+`destination` ne concerne que les **créations**. Un document déjà présent dans le vault est
+mis à jour là où il se trouve, même s'il fait partie d'un arbre plus large synchronisé
+auparavant. Donner l'URL d'un sous-document déjà miroité le rafraîchit à sa place, sans en
+créer de copie.
 
 ### Ce que ça écrit
 

@@ -282,6 +282,53 @@ async def test_in_tree_links_are_rewritten_on_write(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_existing_notes_are_updated_where_they_already_live(tmp_path: Path) -> None:
+    """A document already mirrored elsewhere is refreshed in place, not duplicated."""
+    _mock_tree()
+    await _run(tmp_path, destination="Miroir")
+
+    _mock_tree(child_updated="2026-08-09T10:00:00Z", child_body="corps modifié")
+    report = await _run(tmp_path, destination="Docs")
+
+    assert not (tmp_path / "Docs").exists()
+    assert report.created == 0
+    assert report.updated == 1
+    assert report.unchanged == 1
+    child = tmp_path / "Miroir" / "Racine" / "Enfant.md"
+    assert child.read_text(encoding="utf-8").endswith("corps modifié\n")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_untouched_sibling_is_not_rewritten_when_syncing_in_place(tmp_path: Path) -> None:
+    _mock_tree()
+    await _run(tmp_path, destination="Miroir")
+    root_note = tmp_path / "Miroir" / "Racine" / "Racine.md"
+    before = root_note.read_text(encoding="utf-8")
+
+    _mock_tree(child_updated="2026-08-09T10:00:00Z", child_body="corps modifié")
+    await _run(tmp_path, destination="Docs")
+
+    assert root_note.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_notes_from_another_mirror_are_not_reported_as_orphans(tmp_path: Path) -> None:
+    _mock_tree()
+    await _run(tmp_path, destination="Miroir")
+    elsewhere = tmp_path / "Ailleurs"
+    elsewhere.mkdir()
+    (elsewhere / "Autre.md").write_text("---\ndocs_id: autre-id\n---\n\nx\n", encoding="utf-8")
+
+    _mock_tree()
+    report = await _run(tmp_path, destination="Miroir")
+
+    assert report.orphans == []
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_report_names_the_root_folder_as_destination(tmp_path: Path) -> None:
     _mock_tree()
     report = await _run(tmp_path)
