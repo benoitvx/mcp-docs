@@ -72,3 +72,20 @@ existant. Son compteur d'appels garde donc les appels du premier passage.
 20 s) déclenche un `429` que les 3 retries du client n'absorbent pas.
 **Règle** : une sync d'arbre est proche du plafond. Espacer les racines dans une routine qui
 en synchronise plusieurs, plutôt que de les lancer en rafale.
+
+## Le connecteur `vault` casse si sa version n'est pas épinglée
+
+**Erreur** : dans une session Cowork, tous les tools `mcp__vault__*` échouaient avec
+`Tool '…' has an invalid outputSchema: JSON Schema declares an unsupported dialect
+("$schema": "http://json-schema.org/draft-07/schema#")`. Symptôme trompeur : ça ressemble à
+un problème de chemin ou de droits sur le vault, alors qu'aucun tool n'est appelable.
+**Cause** : les configs déclaraient `npx -y @modelcontextprotocol/server-filesystem` **sans
+version**, donc `latest`. Depuis `2025.11.25`, ce serveur expose un `outputSchema` sur ses 14
+tools, généré par `zod-to-json-schema` qui émet du draft-07 ; l'hôte MCP ne valide qu'en
+2020-12 et rejette tout. La dernière version sans `outputSchema` est `2025.8.21`.
+**Règle** : épingler la version de tout serveur MCP lancé via `npx -y` — sinon une release
+amont casse l'intégration sans qu'on ait rien changé. Épinglé dans les trois configs :
+`~/.claude/settings.json`, `~/.claude.json`, et
+`~/Library/Application Support/Claude/claude_desktop_config.json`.
+**Contournement** : `docs_sync_tree` écrit dans le vault via `DOCS_VAULT_PATH` sans passer par
+le connecteur `vault` — il reste utilisable même quand `vault` est cassé.
