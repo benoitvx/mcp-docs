@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+import mcp_docs.sync as sync_module
 from mcp_docs.client import DocsClient
 from mcp_docs.config import DocsConfig
 from mcp_docs.sync import SyncReport, sync_tree
@@ -14,6 +15,7 @@ from mcp_docs.vault import read_meta
 BASE = "https://docs.example.org"
 ROOT = "5b243392-b3a5-4caa-a7e6-e88566e1c72e"
 CHILD = "11111111-1111-4111-8111-111111111111"
+SIBLING = "22222222-2222-4222-8222-222222222222"
 GRANDCHILD = "33333333-3333-4333-8333-333333333333"
 
 
@@ -334,3 +336,258 @@ async def test_report_names_the_root_folder_as_destination(tmp_path: Path) -> No
     report = await _run(tmp_path)
     assert report.destination == "Docs/Racine"
     assert report.root_title == "Racine"
+
+
+# --- Write collisions -------------------------------------------------------
+#
+# A sync run must never write onto a file that is not already the note of the
+# document being written. Every case below used to end in a silently destroyed
+# file and a report claiming success.
+
+
+def _mock_siblings(*children: tuple[str, str], updated: str = "2026-08-02T10:00:00Z") -> None:
+    """Mock a root whose children are the given ``(uuid, title)`` pairs.
+
+    Materialized paths follow the argument order, which is what fixes the
+    suffix a sibling gets when two titles sanitize to the same file name.
+    """
+    respx.get(f"{BASE}/api/v1.0/documents/{ROOT}/").mock(
+        return_value=httpx.Response(
+            200, json=_doc(ROOT, "Racine", "2026-08-01T10:00:00Z", numchild=len(children))
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{ROOT}/children/").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page(
+                [
+                    _doc(uuid, title, updated, path=f"0000AAA000{rank}")
+                    for rank, (uuid, title) in enumerate(children, start=1)
+                ]
+            ),
+        )
+    )
+    for uuid, title in ((ROOT, "Racine"), *children):
+        respx.get(f"{BASE}/api/v1.0/documents/{uuid}/formatted-content/").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id": uuid, "title": title, "content": f"corps {title}", "updated_at": updated},
+            )
+        )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_orphan_is_not_overwritten_by_the_sibling_taking_its_name(tmp_path: Path) -> None:
+    """Two siblings share a title, so the second is suffixed. When the first is
+    deleted upstream its note becomes an orphan the sync promises never to
+    touch — including when the survivor reverts to the bare name."""
+    _mock_siblings((CHILD, "Projet"), (SIBLING, "Projet"))
+    await _run(tmp_path)
+    orphan = tmp_path / "Docs" / "Racine" / "Projet.md"
+    survivor = tmp_path / "Docs" / "Racine" / "Projet (2).md"
+    assert read_meta(orphan.read_text(encoding="utf-8"))["docs_id"] == CHILD
+    assert read_meta(survivor.read_text(encoding="utf-8"))["docs_id"] == SIBLING
+
+    respx.clear()
+    _mock_siblings((SIBLING, "Projet"), updated="2026-08-09T10:00:00Z")
+    report = await _run(tmp_path)
+
+    assert read_meta(orphan.read_text(encoding="utf-8"))["docs_id"] == CHILD
+    assert survivor.exists()
+    assert report.moved == 0
+    assert [(e["document_id"], e["reason"]) for e in report.errors] == [
+        (SIBLING, "target_occupied")
+    ]
+    assert [o["document_id"] for o in report.orphans] == [CHILD]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_swapped_sibling_names_lose_nothing_and_converge(tmp_path: Path) -> None:
+    """One sibling claims the file name the other is vacating in the same run.
+    The clash is refused instead of resolved destructively, and the run that
+    follows completes the move once the name is actually free."""
+    _mock_siblings((CHILD, "Alpha"), (SIBLING, "Beta"))
+    await _run(tmp_path)
+
+    respx.clear()
+    _mock_siblings((CHILD, "Beta"), (SIBLING, "Gamma"), updated="2026-08-09T10:00:00Z")
+    first = await _run(tmp_path)
+
+    folder = tmp_path / "Docs" / "Racine"
+    assert [(e["document_id"], e["reason"]) for e in first.errors] == [(CHILD, "target_occupied")]
+    assert sorted(p.name for p in folder.glob("*.md")) == ["Alpha.md", "Gamma.md", "Racine.md"]
+
+    respx.clear()
+    _mock_siblings((CHILD, "Beta"), (SIBLING, "Gamma"), updated="2026-08-09T10:00:00Z")
+    second = await _run(tmp_path)
+
+    assert second.errors == []
+    assert sorted(p.name for p in folder.glob("*.md")) == ["Beta.md", "Gamma.md", "Racine.md"]
+    assert read_meta((folder / "Beta.md").read_text(encoding="utf-8"))["docs_id"] == CHILD
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_creation_does_not_overwrite_a_personal_note(tmp_path: Path) -> None:
+    """A note the user wrote carries no docs_id, so it never enters the index.
+    A new document landing on its path must still leave it alone."""
+    _mock_tree()
+    personal = tmp_path / "Docs" / "Racine" / "Enfant.md"
+    personal.parent.mkdir(parents=True)
+    personal.write_text("mes notes à moi\n", encoding="utf-8")
+
+    report = await _run(tmp_path)
+
+    assert personal.read_text(encoding="utf-8") == "mes notes à moi\n"
+    assert (tmp_path / "Docs" / "Racine" / "Racine.md").exists()
+    assert report.created == 1
+    assert [(e["document_id"], e["reason"]) for e in report.errors] == [(CHILD, "target_occupied")]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_creation_does_not_overwrite_another_documents_note(tmp_path: Path) -> None:
+    """The occupant belongs to a document outside this tree — still off limits."""
+    _mock_tree()
+    foreign = tmp_path / "Docs" / "Racine" / "Enfant.md"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text(
+        f"---\ndocs_id: {GRANDCHILD}\n---\n\ncontenu d'un autre document\n", encoding="utf-8"
+    )
+
+    report = await _run(tmp_path)
+
+    assert foreign.read_text(encoding="utf-8").endswith("contenu d'un autre document\n")
+    assert [(e["document_id"], e["reason"]) for e in report.errors] == [(CHILD, "target_occupied")]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_unreadable_note_does_not_abort_the_run(tmp_path: Path) -> None:
+    """A file that is not valid UTF-8 never enters the index, so it looks like a
+    free slot. It is skipped with an error and the rest of the tree still lands."""
+    _mock_tree()
+    broken = tmp_path / "Docs" / "Racine" / "Enfant.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes(b"caf\xe9 encod\xe9 en latin-1")
+
+    report = await _run(tmp_path)
+
+    assert (tmp_path / "Docs" / "Racine" / "Racine.md").exists()
+    assert broken.read_bytes() == b"caf\xe9 encod\xe9 en latin-1"
+    assert report.errors[0]["document_id"] == CHILD
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_unforeseen_failure_is_reported_without_discarding_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gather backstop: one document failing in a way nobody anticipated must
+    not throw away the report for the documents that did succeed."""
+    _mock_tree()
+    real_apply = sync_module._apply
+
+    async def exploding(client, report, node, target, current, stale, names):  # type: ignore[no-untyped-def]
+        if node.id == CHILD:
+            raise RuntimeError("boom")
+        return await real_apply(client, report, node, target, current, stale, names)
+
+    monkeypatch.setattr(sync_module, "_apply", exploding)
+    report = await _run(tmp_path)
+
+    assert (tmp_path / "Docs" / "Racine" / "Racine.md").exists()
+    assert report.errors == [
+        {"document_id": CHILD, "title": "Enfant", "reason": "RuntimeError"}
+    ]
+
+
+# --- Pruning stays inside the folder this run owns ---------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_user_folders_under_the_destination_are_left_alone(tmp_path: Path) -> None:
+    """Empty folders the user keeps under the destination are not this sync's
+    business. Pruning the whole destination used to delete them silently."""
+    _mock_tree()
+    templates = tmp_path / "Docs" / "Templates"
+    attachments = tmp_path / "Docs" / "attachments"
+    templates.mkdir(parents=True)
+    attachments.mkdir(parents=True)
+
+    await _run(tmp_path)
+
+    assert templates.is_dir()
+    assert attachments.is_dir()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_folder_emptied_by_the_run_is_still_pruned(tmp_path: Path) -> None:
+    """Narrowing the prune scope must not stop it doing its actual job: a folder
+    the run empties by renaming its parent still goes away."""
+    _mock_tree()
+    respx.get(f"{BASE}/api/v1.0/documents/{ROOT}/children/").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page(
+                [_doc(CHILD, "Enfant", "2026-08-02T10:00:00Z", numchild=1, path="0000AAA0001")]
+            ),
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{CHILD}/children/").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page([_doc(GRANDCHILD, "Petit", "2026-08-03T10:00:00Z", path="0000AAA00010001")]),
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{GRANDCHILD}/formatted-content/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": GRANDCHILD,
+                "title": "Petit",
+                "content": "corps petit",
+                "updated_at": "2026-08-03T10:00:00Z",
+            },
+        )
+    )
+    await _run(tmp_path)
+    assert (tmp_path / "Docs" / "Racine" / "Enfant" / "Petit.md").exists()
+
+    respx.clear()
+    _mock_tree(child_title="Renommé")
+    respx.get(f"{BASE}/api/v1.0/documents/{ROOT}/children/").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page(
+                [_doc(CHILD, "Renommé", "2026-08-02T10:00:00Z", numchild=1, path="0000AAA0001")]
+            ),
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{CHILD}/children/").mock(
+        return_value=httpx.Response(
+            200,
+            json=_page([_doc(GRANDCHILD, "Petit", "2026-08-03T10:00:00Z", path="0000AAA00010001")]),
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{GRANDCHILD}/formatted-content/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": GRANDCHILD,
+                "title": "Petit",
+                "content": "corps petit",
+                "updated_at": "2026-08-03T10:00:00Z",
+            },
+        )
+    )
+    report = await _run(tmp_path)
+
+    assert (tmp_path / "Docs" / "Racine" / "Renommé" / "Renommé.md").exists()
+    assert (tmp_path / "Docs" / "Racine" / "Renommé" / "Petit.md").exists()
+    assert not (tmp_path / "Docs" / "Racine" / "Enfant").exists()
+    assert report.errors == []

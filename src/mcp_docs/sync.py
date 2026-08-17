@@ -198,6 +198,28 @@ def _record(report: SyncReport, change: Change) -> None:
         report.changes_truncated = True
 
 
+def _record_conflict(report: SyncReport, node: TreeNode, target: Path, vault: Path) -> None:
+    """Refuse a write onto a file that is not already this document's own note.
+
+    The occupant may be an orphan, one of the user's own notes, or another
+    document that has not moved out of the way yet — none of which may be
+    silently replaced. A path held by a document that is itself moving frees up
+    once that move lands, so the next run finishes what this one skipped. Two
+    documents that swap names deadlock instead, and keep being reported until
+    one of the files is renamed by hand: a standing, honest error beats
+    destroying a note to break the tie.
+    """
+    logger.warning("Refusing to overwrite %s for document %s", target, node.id)
+    report.errors.append(
+        {
+            "document_id": node.id,
+            "title": node.title,
+            "reason": "target_occupied",
+            "path": str(target.relative_to(vault)),
+        }
+    )
+
+
 def _owned_folder(
     destination_dir: Path, tree: TreeNode, layout: dict[str, PurePosixPath]
 ) -> Path | None:
@@ -281,6 +303,14 @@ async def sync_tree(
         moved = current is not None and current != target
         stale = current is None or _recorded_updated_at(current) != node.updated_at
 
+        # Writing is only ever allowed onto this document's own note. Anything
+        # else already at the target — orphan, personal note, a sibling that has
+        # not vacated the name yet — is left alone and reported, because a write
+        # here would destroy it with no way back.
+        if target != current and target.exists():
+            _record_conflict(report, node, target, vault)
+            continue
+
         if current is None:
             action = "created"
             report.created += 1
@@ -322,13 +352,35 @@ async def sync_tree(
     if dry_run:
         return report
 
-    await asyncio.gather(
+    # ``return_exceptions`` is a backstop, not the error path: ``_apply`` handles
+    # what it expects. Without it, one unforeseen failure would propagate out of
+    # the gather and throw away the whole report — including the documents that
+    # had already been written successfully.
+    outcomes = await asyncio.gather(
         *(
             _apply(client, report, node, target, current, stale, names)
             for node, target, current, stale in pending
-        )
+        ),
+        return_exceptions=True,
     )
-    prune_empty_dirs(destination_dir)
+    for (node, *_), outcome in zip(pending, outcomes, strict=True):
+        if isinstance(outcome, asyncio.CancelledError):
+            raise outcome
+        if isinstance(outcome, BaseException):
+            logger.warning("Unexpected sync failure for document %s: %s", node.id, outcome)
+            report.errors.append(
+                {
+                    "document_id": node.id,
+                    "title": node.title,
+                    "reason": type(outcome).__name__,
+                }
+            )
+
+    # Confined to the folder this run laid out. Pruning the whole destination
+    # would delete the user's own empty folders, which this sync has no business
+    # touching — and with destination ".", the entire vault's.
+    if owned is not None:
+        prune_empty_dirs(owned)
     return report
 
 
@@ -369,7 +421,9 @@ async def _apply(
             "docs_synced_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         write_atomic(target, compose(meta, body, existing=existing or None))
-    except (DocsAPIError, OSError) as error:
+    except (DocsAPIError, OSError, UnicodeDecodeError) as error:
+        # UnicodeDecodeError is a ValueError, not an OSError: a note that is not
+        # valid UTF-8 would otherwise escape here and abort the entire run.
         logger.warning("Sync failed for document %s: %s", node.id, error)
         report.errors.append(
             {"document_id": node.id, "title": node.title, "reason": type(error).__name__}

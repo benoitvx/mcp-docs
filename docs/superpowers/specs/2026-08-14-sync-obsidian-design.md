@@ -163,8 +163,30 @@ déterministe d'une exécution à l'autre.
 7. Écrire
    Téléchargements parallélisés sous le sémaphore du client.
    Réécriture des liens, composition du frontmatter, écriture atomique.
-   Suppression des dossiers devenus vides sous la destination.
+   Suppression des dossiers devenus vides dans le dossier possédé par l'exécution.
 ```
+
+### Règle d'écriture : un emplacement occupé n'est jamais écrasé
+
+Le classement de l'étape 5 travaille sur l'index pris **avant** l'exécution, alors que l'étape 7
+modifie le disque. Un chemin cible calculé comme libre peut donc être occupé : par un orphelin,
+par une note personnelle, ou par un frère qui n'a pas encore quitté ce nom. `Path.replace` et
+l'écriture atomique écrasent tous deux sans prévenir, et le fichier détruit ne serait signalé
+nulle part.
+
+D'où la règle, appliquée au moment du classement pour que `dry_run` la remonte aussi :
+
+> On n'écrit à un emplacement que s'il est libre, ou s'il porte déjà la note de ce document.
+
+Sinon le document est ignoré et l'incident part dans `errors` avec `reason: target_occupied` et
+le chemin. Un nom pris par un document qui déménage se libère dès que ce déplacement aboutit :
+l'exécution suivante termine ce que celle-ci a laissé. Deux documents qui échangent leurs titres
+se bloquent mutuellement et restent signalés jusqu'à ce qu'un des deux fichiers soit renommé à
+la main — une erreur stable et honnête vaut mieux que détruire une note pour départager.
+
+La suppression des dossiers vides est bornée au dossier possédé par l'exécution, et non à toute
+la destination : les dossiers vides que l'utilisateur garde ailleurs ne regardent pas cette
+synchronisation. Avec `destination: "."` la portée aurait été le vault entier.
 
 En `dry_run`, les étapes 1 à 6 s'exécutent normalement et l'étape 7 est remplacée par la
 production du rapport. Aucune écriture, aucun téléchargement de contenu.

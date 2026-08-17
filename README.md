@@ -382,6 +382,13 @@ la première synchronisation prend ~10 s, les suivantes ~2 s.
 - **Orphelins signalés, jamais supprimés.** Un fichier dont le document n'est plus dans
   l'arbre est listé dans le rapport ; c'est à vous de décider.
 - **Notes personnelles intouchables.** Un `.md` sans `docs_id` n'est jamais lu ni écrasé.
+- **Aucun fichier n'est jamais écrasé par un autre document.** La synchronisation n'écrit que
+  sur la note du document concerné. Si l'emplacement cible est déjà pris — par un orphelin,
+  par une de vos notes, ou par un document qui n'a pas encore libéré ce nom — le document est
+  ignoré et l'incident remonte dans `errors` avec `"reason": "target_occupied"` et le chemin
+  en cause. Le plus souvent l'emplacement se libère tout seul et la synchronisation suivante
+  termine le travail. Deux documents qui échangent leurs titres se bloquent mutuellement :
+  renommez un des deux fichiers à la main, puis relancez.
 - **Images non téléchargées.** Elles restent des URLs authentifiées et ne s'afficheront pas
   dans Obsidian.
 
