@@ -243,6 +243,11 @@ Claude Desktop expose alors les 25 tools MCP. En cas d'échec : `tail -n 50 ~/Li
 | `docs_list_accesses` | Lister les utilisateurs ayant accès à un document |
 | `docs_list_invitations` | Lister les invitations en attente sur un document |
 
+`docs_get_document_content` et `docs_list_children` sont pour un usage ponctuel,
+document par document. Pour répliquer un arbre entier (ex. vers un vault Obsidian),
+utiliser `docs_sync_tree` plutôt que de les enchaîner nœud par nœud — bien plus rapide
+et bien moins coûteux en tokens.
+
 ### ✏️ Création et édition (5)
 
 | Tool | Description |

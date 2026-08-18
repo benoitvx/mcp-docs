@@ -84,6 +84,12 @@ async def docs_get_document_content(
 ) -> str:
     """Retrieve the content of a document by its ID.
 
+    For mirroring an entire document tree to disk (e.g. an Obsidian vault), do not
+    call this tool once per document and copy the result into `Write` — use
+    `docs_sync_tree` instead. It fetches content and writes it directly server-side,
+    skipping documents that have not changed. Reconstructing a tree this way costs
+    far more tokens and hits this tool's own size limits on large documents.
+
     Args:
         document_id: UUID of the document.
         content_format: Output format — "markdown", "html", or "json".
@@ -302,6 +308,12 @@ async def docs_list_children(
     page_size: int = 20,
 ) -> str:
     """List child documents (sub-pages) of a given parent document.
+
+    For mirroring an entire document tree to disk (e.g. an Obsidian vault), do not
+    call this tool once per node to walk the tree by hand — use `docs_sync_tree`
+    instead. It discovers every level in parallel and writes directly to the vault,
+    which is both faster and far cheaper in tokens than reconstructing the tree
+    node by node with this tool.
 
     Args:
         document_id: UUID of the parent document.

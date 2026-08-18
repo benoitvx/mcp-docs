@@ -59,6 +59,9 @@ async def docs_sync_tree(
 ) -> str:
     """Mirror a Docs document and all its sub-documents into the local Obsidian vault.
 
+    This is the preferred way to mirror a tree: prefer it over calling
+    `docs_list_children` and `docs_get_document_content` once per document.
+
     Only documents whose server-side update time differs from the one recorded in
     the local note are downloaded, so a routine run is cheap. A document that is
     already mirrored somewhere in the vault is refreshed where it lives, even if

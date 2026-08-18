@@ -209,6 +209,11 @@ Doc MCP SDK : https://modelcontextprotocol.io/
 | `docs_list_children` | Lister les sous-documents | P2 | ✅ |
 | `docs_sync_tree` | Miroir d'un arbre de documents vers un vault Obsidian | P1 | ✅ |
 
+`docs_sync_tree` est le chemin recommandé pour toute réplication d'arbre (découverte
+parallèle, écriture incrémentale). `docs_list_children` et `docs_get_document_content`
+sont pour un usage ponctuel document par document — pas pour reconstruire un arbre à la
+main en les enchaînant nœud par nœud.
+
 ---
 
 ## Expected Behavior
