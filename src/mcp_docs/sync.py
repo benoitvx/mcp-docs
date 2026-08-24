@@ -220,6 +220,54 @@ def _record_conflict(report: SyncReport, node: TreeNode, target: Path, vault: Pa
     )
 
 
+def _folder_owner(directory: Path) -> str | None:
+    """The id of the document a folder mirrors, or None for a plain folder.
+
+    Folder-note convention: a mirrored folder always holds its own note under the
+    same name. A folder without that note is the user's own organisation, even
+    when synced notes happen to sit inside it.
+    """
+    try:
+        text = (directory / f"{directory.name}.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return read_meta(text).get("docs_id")
+
+
+def _nesting_owner(target: Path, vault: Path, tree_ids: set[str]) -> str | None:
+    """The foreign document whose folder would swallow ``target``, if any.
+
+    Walks from the target's folder up to the vault root. A folder owned by a
+    document *of this tree* is the normal case — that is exactly what a parent's
+    folder is for. Only a document outside the tree counts: landing there would
+    wedge these notes between that document and its own children, in a place the
+    server knows nothing about, so its next sync would see nothing but orphans.
+    """
+    for directory in target.parents:
+        if directory == vault or not directory.is_relative_to(vault):
+            return None
+        owner = _folder_owner(directory)
+        if owner is not None and owner not in tree_ids:
+            return owner
+    return None
+
+
+def _record_nesting_refusal(
+    report: SyncReport, node: TreeNode, target: Path, vault: Path, owner: str
+) -> None:
+    """Refuse a placement inside another document's folder, and say whose it is."""
+    logger.warning("Refusing to nest document %s inside document %s", node.id, owner)
+    report.errors.append(
+        {
+            "document_id": node.id,
+            "title": node.title,
+            "reason": "nested_in_document",
+            "path": str(target.relative_to(vault)),
+            "owner_document_id": owner,
+        }
+    )
+
+
 def _owned_folder(
     destination_dir: Path, tree: TreeNode, layout: dict[str, PurePosixPath]
 ) -> Path | None:
@@ -296,12 +344,23 @@ async def sync_tree(
         scanned=len(nodes),
     )
 
+    tree_ids = set(nodes)
     pending: list[tuple[TreeNode, Path, Path | None, bool]] = []
     for doc_id, target in targets.items():
         node = nodes[doc_id]
         current = index.get(doc_id)
         moved = current is not None and current != target
         stale = current is None or _recorded_updated_at(current) != node.updated_at
+
+        # A new placement must not land inside a folder that mirrors another
+        # document. A note already living in one stays put — this run did not put
+        # it there — so only a move-in is nesting this run would be responsible
+        # for, and only that is refused.
+        if target != current:
+            owner = _nesting_owner(target, vault, tree_ids)
+            if owner is not None:
+                _record_nesting_refusal(report, node, target, vault, owner)
+                continue
 
         # Writing is only ever allowed onto this document's own note. Anything
         # else already at the target — orphan, personal note, a sibling that has

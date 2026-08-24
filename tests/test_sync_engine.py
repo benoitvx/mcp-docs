@@ -76,14 +76,16 @@ def _mock_tree(
     return root_content, child_content
 
 
-async def _run(vault: Path, dry_run: bool = False, destination: str = "Docs") -> SyncReport:
+async def _run(
+    vault: Path, dry_run: bool = False, destination: str = "Docs", document: str = ROOT
+) -> SyncReport:
     client = DocsClient(DocsConfig(base_url=BASE, session_cookie="c"))
     try:
         return await sync_tree(
             client,
             vault_root=vault,
             destination=destination,
-            document=f"{BASE}/docs/{ROOT}/",
+            document=f"{BASE}/docs/{document}/",
             dry_run=dry_run,
         )
     finally:
@@ -502,6 +504,116 @@ async def test_unforeseen_failure_is_reported_without_discarding_the_run(
     assert report.errors == [
         {"document_id": CHILD, "title": "Enfant", "reason": "RuntimeError"}
     ]
+
+
+# --- Never land a tree in the middle of another document ---------------------
+#
+# A folder that mirrors a document holds that document's own note under the same
+# name (the folder-note convention). Writing a foreign tree inside such a folder
+# would wedge it between a parent and its children, in a place the server has no
+# idea about — the next sync of the real parent would only ever see orphans.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_new_tree_is_refused_inside_another_documents_folder(tmp_path: Path) -> None:
+    _mock_tree()
+    host = tmp_path / "Docs" / "Autre"
+    host.mkdir(parents=True)
+    (host / "Autre.md").write_text(f"---\ndocs_id: {GRANDCHILD}\n---\n\nhôte\n", encoding="utf-8")
+
+    report = await _run(tmp_path, destination="Docs/Autre")
+
+    assert not (host / "Racine").exists()
+    assert report.created == 0
+    assert [(e["document_id"], e["reason"]) for e in report.errors] == [
+        (ROOT, "nested_in_document"),
+        (CHILD, "nested_in_document"),
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_refusal_names_the_document_that_owns_the_folder(tmp_path: Path) -> None:
+    _mock_tree()
+    host = tmp_path / "Docs" / "Autre"
+    host.mkdir(parents=True)
+    (host / "Autre.md").write_text(f"---\ndocs_id: {GRANDCHILD}\n---\n\nhôte\n", encoding="utf-8")
+
+    report = await _run(tmp_path, destination="Docs/Autre")
+
+    assert report.errors[0]["owner_document_id"] == GRANDCHILD
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_deeper_ancestor_owning_a_folder_also_blocks_the_write(tmp_path: Path) -> None:
+    """The owned folder need not be the destination itself: any ancestor between
+    the destination and the vault root wedges the tree just the same."""
+    _mock_tree()
+    host = tmp_path / "Docs" / "Autre"
+    (host / "Rangement").mkdir(parents=True)
+    (host / "Autre.md").write_text(f"---\ndocs_id: {GRANDCHILD}\n---\n\nhôte\n", encoding="utf-8")
+
+    report = await _run(tmp_path, destination="Docs/Autre/Rangement")
+
+    assert not (host / "Rangement" / "Racine").exists()
+    assert {e["reason"] for e in report.errors} == {"nested_in_document"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_note_already_living_inside_another_tree_is_still_updated_in_place(
+    tmp_path: Path,
+) -> None:
+    """A child's note legitimately sits inside its parent's folder. Syncing that
+    child on its own must refresh it where it is — the guard only ever refuses a
+    *new* placement, never a document staying put."""
+    _mock_tree()
+    await _run(tmp_path)
+
+    respx.get(f"{BASE}/api/v1.0/documents/{CHILD}/").mock(
+        return_value=httpx.Response(
+            200, json=_doc(CHILD, "Enfant", "2026-08-09T10:00:00Z", path="0000AAA0001")
+        )
+    )
+    respx.get(f"{BASE}/api/v1.0/documents/{CHILD}/formatted-content/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": CHILD,
+                "title": "Enfant",
+                "content": "corps modifié",
+                "updated_at": "2026-08-09T10:00:00Z",
+            },
+        )
+    )
+    report = await _run(tmp_path, document=CHILD)
+
+    assert not (tmp_path / "Docs" / "Enfant.md").exists()
+    child_note = tmp_path / "Docs" / "Racine" / "Enfant.md"
+    assert child_note.read_text(encoding="utf-8").endswith("corps modifié\n")
+    assert report.errors == []
+    assert report.updated == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_plain_folder_holding_notes_is_not_mistaken_for_a_document(
+    tmp_path: Path,
+) -> None:
+    """An organisational folder the user made carries no folder note of its own,
+    even when synced notes sit inside it. It stays a valid destination."""
+    _mock_tree()
+    plain = tmp_path / "Docs" / "Rangement"
+    plain.mkdir(parents=True)
+    (plain / "Autre.md").write_text(f"---\ndocs_id: {GRANDCHILD}\n---\n\nx\n", encoding="utf-8")
+
+    report = await _run(tmp_path, destination="Docs/Rangement")
+
+    assert (plain / "Racine" / "Racine.md").exists()
+    assert report.errors == []
+    assert report.created == 2
 
 
 # --- Pruning stays inside the folder this run owns ---------------------------
