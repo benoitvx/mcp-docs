@@ -214,6 +214,32 @@ parallèle, écriture incrémentale). `docs_list_children` et `docs_get_document
 sont pour un usage ponctuel document par document — pas pour reconstruire un arbre à la
 main en les enchaînant nœud par nœud.
 
+### Choisir la destination d'une sync
+
+Il n'y a **pas de fichier sommaire** à maintenir : la structure du vault se lit à la
+demande via le MCP `vault` (`directory_tree` / `list_directory`), qui est toujours à jour.
+Ne pas en générer un — il faudrait le resynchroniser à chaque renommage côté Obsidian, et
+un sommaire périmé est pire que pas de sommaire.
+
+Avant d'appeler `docs_sync_tree` pour un premier import :
+
+1. Lister les dossiers de niveau 1 du vault (`directory_tree`, profondeur 1-2 — inutile de
+   scanner tout le vault).
+2. Écarter tout dossier qui **est** le miroir d'un Docs. Convention folder-note : un dossier
+   `X/` miroir d'un document contient toujours `X/X.md` avec un `docs_id` en frontmatter. Un
+   dossier d'organisation créé à la main n'a pas ce fichier auto-titré — même s'il contient
+   des notes synchronisées. Vérifier **toute la chaîne d'ancêtres**, pas seulement le dossier
+   candidat : `A/B` est invalide si `A` ou `B` est un miroir de document.
+3. Proposer un dossier libre par correspondance thématique avec le titre du document, et
+   **demander confirmation** avant d'écrire. Si aucun candidat évident, demander directement
+   plutôt que de choisir un défaut arbitraire.
+
+Ne jamais nicher un arbre dans le dossier d'un autre Docs : cette arborescence est possédée
+par le serveur, pas par le vault — les fichiers étrangers y seraient vus comme orphelins à la
+prochaine sync du vrai parent. `sync_tree` refuse ce cas côté code (`reason:
+"nested_in_document"`, avec `owner_document_id`), mais le refus est un filet de sécurité :
+l'agent ne doit pas proposer une telle destination en premier lieu.
+
 ---
 
 ## Expected Behavior

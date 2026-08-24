@@ -89,3 +89,28 @@ amont casse l'intégration sans qu'on ait rien changé. Épinglé dans les trois
 `~/Library/Application Support/Claude/claude_desktop_config.json`.
 **Contournement** : `docs_sync_tree` écrit dans le vault via `DOCS_VAULT_PATH` sans passer par
 le connecteur `vault` — il reste utilisable même quand `vault` est cassé.
+
+## Relayer une recommandation d'agent sans vérifier son prémisse
+
+**Erreur** : un agent de sync a recommandé un « mode squelette » pour `docs_sync_tree`, motivé
+par le coût en tokens d'un premier import. J'ai classé ça « réel et le plus impactant » sans
+vérifier — alors que `sync_tree` écrit le contenu sur disque côté serveur et ne renvoie à
+l'agent qu'un rapport de compteurs : le coût en tokens est déjà indépendant de la taille des
+documents. La recommandation résolvait un problème qui n'existait plus.
+**Cause** : l'agent annonçait lui-même n'avoir aucun accès au code source. J'ai repris sa
+conclusion au lieu de la traiter comme une hypothèse à confirmer dans le code.
+**Règle** : un rapport d'agent sans accès au code est une observation de comportement, pas un
+diagnostic. Vérifier chaque affirmation dans la source avant de la relayer — ici trois des
+cinq points étaient déjà résolus (`_RESERVED` couvre tous les caractères Windows, `orphans` et
+`errors` ne sont jamais tronqués, le rechargement du cookie sur 401 est délibéré).
+
+## Un chemin cible « libre » peut quand même être interdit
+
+**Erreur** : `sync_tree` ne refusait qu'une collision de chemin *exact* (`target_occupied`).
+Une destination pointant à l'intérieur du dossier d'un autre document passait sans erreur —
+l'arbre étranger s'installait entre un parent et ses enfants, et n'était détecté qu'à la
+sync suivante du vrai parent, sous forme d'orphelins.
+**Règle** : pour une écriture dans une arborescence possédée, valider aussi la **chaîne
+d'ancêtres** du chemin, pas seulement le nœud visé. Convention folder-note : un dossier `X/`
+est le miroir d'un document ssi `X/X.md` porte un `docs_id`. Ne refuser que les placements
+*nouveaux* (`target != current`) — une note qui vit déjà là n'a pas été mise là par ce run.

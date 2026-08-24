@@ -71,6 +71,14 @@ async def docs_sync_tree(
     tree are reported as orphans and never deleted, notes without a docs_id are
     never touched, and images stay as authenticated URLs that will not render.
 
+    `destination` must be a plain organisational folder, never a folder that
+    mirrors another document. A mirrored folder holds a note of the same name
+    carrying a `docs_id` ("Projet/Projet.md"); a folder without that note is the
+    user's own, even when synced notes sit inside it. Writing there would wedge
+    this tree between another document and its children, so any placement inside
+    one is refused and reported with reason "nested_in_document" — pick a plain
+    folder, or the vault root, instead of retrying the same destination.
+
     Args:
         document: Docs URL of the parent document, or its UUID.
         destination: Where documents that have no note yet are created. The tree
