@@ -1,159 +1,50 @@
-# Todo — Prochaines étapes
+# Tâche — Réparer la CI (branche `fix/ci-green`)
 
-## 🎯 Tâche en cours — Diagnostic des erreurs API (logger les bodies)
+## Contexte
 
-**Symptôme** : 500 sur `docs_update_document_content` côté Claude Code (session Obsidian, 2026-05-05). Le tool renvoie `"Request failed (HTTP 500)."` sans aucun détail. Le body de réponse de l'API est jeté avant même d'être loggué — `client.py:_raise_for_api_status` ne lit pas `resp.text`. En plus, les `logger.warning(...)` actuels partent en stderr et **Claude Code ne capture pas le stderr** des subprocess MCP dans ses `.jsonl` (seul Claude Desktop le faisait).
+Les 3 PR ouvertes (#8, #9, #10) sont rouges sur les mêmes deux jobs, pour des causes
+systémiques indépendantes du code proposé :
 
-**Objectif** : surfacer le body API + méthode + URL dans un fichier de log persistant côté serveur, **sans** changer le message renvoyé au LLM (ANSSI : pas de leak d'internes).
+1. `secrets-scan` : `gitleaks-action@v2` reçoit un `403 Resource not accessible by
+   integration` sur `GET /repos/.../pulls/{n}/commits` — le `GITHUB_TOKEN` par défaut
+   n'a pas `pull-requests: read`, et aucun bloc `permissions:` n'est déclaré.
+2. `lint-test` : `ruff`, `pyright` et `pytest` passent ; seul `pip-audit` échoue
+   (30 CVE / 8 paquets runtime : starlette, cryptography, mcp, pyjwt,
+   python-multipart, idna, click, pydantic-settings).
 
-- [x] `paths.py` : ajouter `log_file_path()` → `~/.local/state/mcp-docs/server.log` (XDG_STATE)
-- [x] `app.py` : `_configure_logging()` au boot, FileHandler dédié sur le logger `mcp_docs` (pas root, pas de doublon avec FastMCP)
-- [x] `exceptions.py` : champ optionnel `body: str | None` dans `DocsAPIError` + sous-classes (default None)
-- [x] `client.py` `_raise_for_api_status` : tronquer `resp.text` à 1KB, logger `method URL → status` + body, passer le body dans l'exception
-- [x] `tools.py` `_error_response` : log enrichi (`status / body`) — message user-facing inchangé
-- [x] Vérifier `tests/test_tools.py:296` (assert `"Request failed (HTTP 500)"`) — doit passer sans modif
-- [x] Reproduction du 500 → log surface `keys=[...]` sans `content` → cause identifiée
+## Plan
 
-### Diagnostic
+- [x] Déclarer `permissions:` explicitement sur les deux jobs du workflow
+- [x] `uv lock --upgrade` pour purger les CVE runtime
+- [x] Vérifier localement : `pip-audit` propre
+- [x] Vérifier localement : `ruff` + `pyright` + `pytest` verts après le bump
+- [x] Commit ciblé (workflow + uv.lock uniquement, pas le WIP en cours)
+- [x] Pousser et ouvrir la PR
 
-Pas de bug Y-Provider. Refactor délibéré côté backend Docs ([PR suitenumerique/docs#2171](https://github.com/suitenumerique/docs/pull/2171), v5.0.0, mergée 2026-04-27) : le champ `content` a été retiré du serializer `GET /documents/{id}/` pour éviter de fetch S3 sur chaque metadata. La lecture/écriture du contenu vit maintenant sur des routes dédiées :
+## Résultat
 
-- `GET /documents/{id}/content/` (no params) → stream Yjs base64 brut en `text/plain` (avec ETag)
-- `PATCH /documents/{id}/content/` `{"content": "<b64>", "websocket": <bool>}` → `204 No Content`
-- `GET /documents/{id}/formatted-content/?content_format=…` → ancien `/content/?content_format=…` renommé
+**`secrets-scan`** — ajout d'un `permissions: {}` global (moindre privilège) et d'un bloc
+explicite par job. `secrets-scan` obtient `pull-requests: read`, ce qui débloque l'appel
+`/pulls/{n}/commits` de gitleaks. `lint-test` se contente de `contents: read`.
 
-Confirmé empiriquement par curl côté prod (2026-05-05).
+**`lint-test` / `pip-audit`** — `uv lock --upgrade` : 30 CVE sur 8 paquets ramenées à 0.
+Bumps notables : `mcp` 1.27.0 → 1.29.1, `starlette` 1.0.0 → 1.6.0,
+`cryptography` 46.0.7 → 50.0.0, `pyjwt` 2.12.1 → 2.13.0,
+`python-multipart` 0.0.26 → 0.0.32, `idna` 3.11 → 3.19, `click` 8.3.2 → 8.4.2,
+`pydantic-settings` 2.14.0 → 2.15.0.
 
-### Patch appliqué
+Les planchers de `pyproject.toml` ont été remontés sur les advisories (`mcp>=1.28.1`,
+`pydantic-settings>=2.14.2`, `python-multipart>=0.0.31`) : le lock protège la CI, mais
+une résolution fraîche depuis le seul `pyproject.toml` pouvait encore retomber sur une
+version vulnérable.
 
-- [x] `client.py` `get_document_content` → migre vers `/formatted-content/`
-- [x] `client.py` `_markdown_to_yjs_base64` → lit le Yjs base64 sur `/documents/{temp_id}/content/` (`text/plain`) au lieu du JSON detail
-- [x] `client.py` `update_document_content` → PATCH sur `/documents/{id}/content/`, retourne `str` (id) au lieu de `DocumentSummary` (l'endpoint renvoie `204`)
-- [x] `tools.py` `docs_update_document_content` → consomme le nouveau type de retour
-- [x] Tests adaptés (mocks respx : URLs et response types)
-- [x] `CLAUDE.md` § Endpoints — section markdown/yjs/PATCH refresh
-- [x] `ruff check` ✅ / `pyright` ✅ / `pytest` ✅ (180 tests)
-- [ ] **À tester côté Mac** : redémarrer la session MCP (sync nouvelle version `mcp-docs`), refaire l'update qui 500 — doit passer maintenant
+`mcp` est **plafonné sous 2.0**. `uv lock --upgrade` sans contrainte proposait `mcp 2.1.0` ;
+la 1.28.1 suffit à purger les advisories, et valider un saut de version majeure n'a pas sa
+place dans un correctif de sécurité. À traiter séparément.
 
----
+**Vérifications locales** : `ruff` ✅, `pyright` (0 erreur) ✅, `pytest` (180 tests) ✅.
+`pip-audit` ne tourne pas sur cette machine (`ensurepip` crashe en SIGABRT à la création de
+son venv isolé — problème local, la CI Linux n'est pas concernée) ; les 32 paquets runtime
+épinglés ont donc été vérifiés directement contre l'API OSV : **0 vulnérabilité**.
 
-## ✅ Fait — Restreindre `docs_delete_document` au créateur
-
-- [x] Étendre `DocumentSummary` avec un champ `creator: str | dict | None`
-- [x] Ajouter `DocsClient.get_document(document_id)` (GET `/documents/{id}/`)
-- [x] Modifier `docs_delete_document` : 2 GET (document + me) puis comparer `creator`/`me.id` avant DELETE
-- [x] Fixtures de test (`SAMPLE_DOCUMENT_DETAIL`, `SAMPLE_DOCUMENT_DETAIL_OTHER_CREATOR`)
-- [x] Tests tools (succès créateur, succès dict, refus non-créateur, refus creator manquant, 404)
-- [x] Tests client pour `get_document`
-- [x] Mise à jour CLAUDE.md (table tools + endpoint)
-- [x] `uv run ruff check . && uv run pyright && uv run pytest` (180 tests OK, lint/pyright clean)
-
-### Résultat
-
-`docs_delete_document` refuse désormais toute suppression d'un document dont l'utilisateur authentifié n'est pas le créateur. Mécanique : avant le `DELETE`, le tool fait `GET /documents/{id}/` puis `GET /users/me/`, extrait `creator` (str ou `{"id": ...}`) et compare avec `me.id`. Si pas de match (ou `creator` absent), retour `"Error: you can only delete documents you created."` sans appel `DELETE`. La couche transport (session/CSRF aujourd'hui, OIDC plus tard) n'est pas affectée.
-
-Fichiers modifiés : `src/mcp_docs/models.py`, `src/mcp_docs/client.py`, `src/mcp_docs/tools.py`, `tests/conftest.py`, `tests/test_tools.py`, `tests/test_client.py`, `CLAUDE.md`.
-
-Test E2E (Claude Desktop, 2026-04-27) ✅ :
-- Création + suppression d'un doc créé par soi → corbeille OK.
-- Suppression d'un doc partagé ("tonton du bled", non-créateur) → refus client-side, pas de DELETE.
-- UUID `00000000-…` (placeholder renvoyé par le backend Docs au lieu d'un 404) → également refusé. Défense en profondeur confirmée.
-
----
-
-## ✅ Fait
-
-### Fondations
-- [x] Config Pydantic Settings (`DocsConfig`) — remplace `os.environ.get()` éparpillés, validation `env_prefix=DOCS_`, contraintes sur retries/concurrent
-- [x] Modèles Pydantic typés (`DocumentSummary`, `DocumentContent`, `PaginatedResponse[T]`, `UserInfo`, `DocumentAccess`, `Invitation`) — fini les `dict` bruts
-- [x] Hiérarchie d'exceptions (`DocsAPIError` + `DocsAuthError` / `DocsPermissionError` / `DocsNotFoundError` / `DocsValidationError` / `DocsRateLimitError`) avec mapping HTTP auto
-- [x] Retry logic — tenacity, retry sur 429/502/503/timeout, exponential backoff
-- [x] Rate limiting — `asyncio.Semaphore`, max 5 requêtes concurrentes
-- [x] CLI `--config-check` pour valider config + auth sans lancer le serveur MCP
-- [x] MCP Resources (`docs://user`, `docs://documents`)
-
-### Tools CRUD & recherche
-- [x] `docs_list_documents` — liste paginée
-- [x] `docs_get_document_content` — markdown / html / json
-- [x] `docs_create_document` — depuis markdown (multipart, conversion backend)
-- [x] `docs_search_documents` — par titre ou contenu
-- [x] `docs_get_me` — infos user authentifié
-- [x] `docs_list_children` — sous-documents
-
-### Tools édition
-- [x] `docs_update_document_title` — renommer (PATCH JSON)
-- [x] `docs_update_document_content` — **avec markdown formaté** via trick temp-doc + transplant Yjs (pas besoin de pycrdt côté client)
-- [x] `docs_delete_document` — soft delete (corbeille)
-
-### Tools accès/permissions
-- [x] `docs_list_accesses`, `docs_grant_access`, `docs_update_access`, `docs_revoke_access`
-- [x] `docs_list_invitations`, `docs_create_invitation`
-
-### Tools IA (natifs Docs)
-- [x] `docs_ai_transform` — correct, rephrase, summarize, beautify, emojify, prompt
-- [x] `docs_ai_translate` — ISO language code
-
-### Tools partage par lien
-- [x] `docs_update_link_configuration` — restricted / authenticated / public + rôle
-
-### Tools favoris & organisation
-- [x] `docs_list_favorites`, `docs_add_favorite`, `docs_remove_favorite`
-- [x] `docs_move_document` — positions first-child/last-child/left/right/siblings
-- [x] `docs_duplicate_document` — avec/sans descendants + accesses
-- [x] `docs_list_trashbin`, `docs_restore_document`
-
-### Qualité & CI
-- [x] 175 tests (lint + pyright + pytest + pip-audit + gitleaks en CI)
-- [x] Fix CVE-2026-40347 (python-multipart bumped à 0.0.26)
-- [x] README complet avec les 25 tools, 4 workflows, architecture, sécurité ANSSI
-- [x] Évaluations MCP — `evaluation.xml` avec 10 Q&A pairs (placeholders à remplir)
-
-### Cookie session — rotation automatisée (avril 2026)
-- [x] Module `paths.py` — résolution XDG (`~/.local/state/mcp-docs/session.json`, profil Chromium sous `~/.local/share/mcp-docs/browser-profile/`)
-- [x] `load_config()` + `read_session_file()` dans `config.py` — précédence `DOCS_SESSION_COOKIE` > `DOCS_SESSION_FILE` > défaut XDG, `model_validator` reste pur
-- [x] CLI `mcp-docs-refresh-session` — fast-path HTTP (probe `/users/me/`) + fallback Playwright avec profil persistant, écriture atomique `0600`
-- [x] Flag `--headless` + notification macOS `osascript` sur échec (runs planifiés)
-- [x] Extra optionnel `[browser]` pour Playwright (pas imposé aux autres users)
-- [x] 14 nouveaux tests (`tests/test_session_file.py`) — parsing + précédence
-- [x] Plist launchd horaire documenté dans README, activable en 3 commandes `launchctl`
-- [x] README « Rotation des secrets » mis à jour, bloc Claude Desktop nettoyé (plus de cookie en dur)
-
----
-
-## 🚧 À faire
-
-### P0 — Migration auth OIDC
-- [ ] Migrer le client vers `/external_api/v1.0/` avec auth OIDC Bearer token
-- [ ] Intégrer ProConnect (authorization_code flow) pour obtenir le token
-- [ ] Supprimer le hack CSRF (plus nécessaire avec Bearer token)
-- [ ] Mettre à jour les tests et la doc
-
-Ref : issue [suitenumerique/docs#1703](https://github.com/suitenumerique/docs/issues/1703), PR [#1923](https://github.com/suitenumerique/docs/pull/1923)
-
-Bloqué : attendre le token exchange côté La Suite (@jmaupetit).
-
-### P1 — Distribution
-- [ ] Publier sur PyPI (`pip install mcp-docs` ou `uvx mcp-docs`)
-- [ ] Workflow GitHub Actions pour release auto (tag → build → publish)
-- [ ] Documentation installation via PyPI dans le README
-
-### P2 — Robustesse & gouvernance
-- [ ] Remplir les placeholders dans `evaluation.xml` avec un compte de test stable
-- [ ] Ajouter le pre-commit hook gitleaks (`uv run pre-commit install` documenté mais à vérifier sur CI)
-- [ ] Configurer le repo GitHub (branch protection) — nécessite GitHub Pro ou repo public
-- [ ] Ajouter des évals pour les nouveaux tools (IA, partage, organisation)
-
-### P3 — Fonctionnalités additionnelles
-- [ ] `docs_upload_attachment` — upload de fichiers/images (endpoint `/attachment-upload/`)
-- [ ] `docs_list_versions` + `docs_get_version` — historique du document
-- [ ] `docs_comment` / `docs_list_threads` — collaboration asynchrone
-- [ ] `docs_ask_for_access` — demander l'accès à un doc (workflow utilisateur)
-
----
-
-## Notes
-
-- **Markdown update sans pycrdt** : on exploite le convertisseur backend en créant un doc temporaire, en récupérant son Yjs pré-converti, et en le transplantant sur le doc cible. Pas de parser markdown → BlockNote côté client nécessaire. Coût : 4 appels API par update au lieu d'1.
-- **Auth session + CSRF** : hack temporaire. Le CSRF token est généré côté client (64 chars hex via `secrets.token_hex(32)`), injecté en cookie + header `X-CSRFToken` + `Referer`. Partira avec la migration OIDC.
-- **Rotation cookie via Playwright** : palier intermédiaire en attendant l'OIDC. Évite le DataPass ProConnect (4 rôles + 5j ouvrés) trop lourd pour un outil mono-utilisateur. Profil Chromium persistant → la session ProConnect IdP est réutilisée → refresh silencieux dans 99% des cas. Notifications macOS quand la re-MFA est requise.
-- **Tools non-idempotents marqués destructive=True** : delete, revoke_access, update_access, remove_favorite, move, update_link_configuration.
+**Reste à faire** : migration `mcp` 2.x, dans une PR dédiée.
