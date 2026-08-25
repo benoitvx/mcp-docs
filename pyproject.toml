@@ -4,11 +4,15 @@ version = "0.1.0"
 description = "MCP server exposing the Docs API (La Suite numérique) to AI agents"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.27.0",
+    # Floors track the fix versions of known advisories, so a fresh resolve
+    # from this file alone cannot land on a vulnerable release. mcp is capped
+    # below 2.0 on purpose: 1.28.1 already clears every known advisory, so
+    # validating a major-version jump does not belong in a security bump.
+    "mcp>=1.28.1,<2",
     "httpx>=0.28.1",
     "tenacity>=9.1.4",
-    "pydantic-settings>=2.14.0",
-    "python-multipart>=0.0.26",
+    "pydantic-settings>=2.14.2",
+    "python-multipart>=0.0.31",
 ]
 
 [project.scripts]
