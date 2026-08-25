@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege by default: every job opts into what it needs.
+permissions: {}
+
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +43,11 @@ jobs:
 
   secrets-scan:
     runs-on: ubuntu-latest
+    # gitleaks-action lists the PR commits to scope its scan; without
+    # pull-requests: read the API answers 403 and the job fails on every PR.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
