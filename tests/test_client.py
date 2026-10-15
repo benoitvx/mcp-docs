@@ -1,6 +1,8 @@
 """Unit tests for DocsClient."""
 
 import asyncio
+import base64
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -139,6 +141,7 @@ class TestUpdateDocumentContent:
     def test_merge_replaces_fragment_offline(self, docs_client_session: DocsClient) -> None:
         """Applying the differential update onto a copy of A's server state
         yields a fragment that only contains B's content (no duplicate title)."""
+
         def make_state(text: str) -> bytes:
             d = Doc()
             frag = d.get("document-store", type=XmlFragment)
@@ -174,28 +177,31 @@ class TestUpdateDocumentContent:
         target_id = "aaaa-bbbb-cccc-0001"
         temp_id = "temp-1234-5678"
 
-        # Step 1: y/hub state of the target document
-        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
-            return_value=Response(200, json={"doc": yhub_state("ancien")})
-        )
-        # Step 2: create temp doc (multipart POST on /documents/)
+        # Step 1: create temp doc (multipart POST on /documents/)
         create_route = respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        # Step 3: y/hub state of the temp doc (converted markdown)
-        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
+        # Step 2: y/hub state of the temp doc (converted markdown)
+        get_temp_route = respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
             return_value=Response(200, json={"doc": yhub_state("nouveau")})
         )
-        # Step 4: PATCH y/hub with the lib0-encoded update
+        # Step 3: DELETE temp doc
+        delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+        # Step 4: y/hub state of the target document (read last, right before
+        # computing the diff)
+        get_target_route = respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("ancien")})
+        )
+        # Step 5: PATCH y/hub with the lib0-encoded update
         patch_route = respx.patch(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
             return_value=Response(200)
         )
-        # Step 5: DELETE temp doc
-        delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         result = await docs_client_session.update_document_content(target_id, "# nouveau")
         assert result == target_id
         assert create_route.called
+        assert get_temp_route.called
+        assert get_target_route.called
         assert patch_route.called
         assert delete_route.called
 
@@ -206,8 +212,90 @@ class TestUpdateDocumentContent:
         assert req.content.startswith(bytes([118]))  # lib0 object marker
         assert b"update" in req.content
 
+        # Order: the target's y/hub state is read AFTER the temp doc has been
+        # created (conversion done first), keeping the concurrency window short.
+        call_urls = [str(call.request.url) for call in respx.calls]
+        create_idx = call_urls.index(f"{API}/documents/")
+        target_idx = call_urls.index(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}")
+        assert target_idx > create_idx
+
+    @respx.mock
+    async def test_target_empty_state_is_valid(self) -> None:
+        """A blank target document returns b"" (one GET, no wait) and the
+        PATCH is still sent."""
+        client = DocsClient(make_config(max_retries=0))
+        target_id = "aaaa-bbbb-cccc-0001"
+        temp_id = "temp-1234-5678"
+
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("nouveau")})
+        )
+        respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+        # Target has no state yet -> "" in y/hub.
+        target_route = respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200, json={"doc": ""})
+        )
+        patch_route = respx.patch(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200)
+        )
+
+        with patch("mcp_docs.client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = await client.update_document_content(target_id, "# nouveau")
+
+        assert result == target_id
+        assert sleep_mock.await_count == 0  # no wait for the (blank) target
+        assert len(target_route.calls) == 1  # exactly one GET on the target
+        assert patch_route.called
+        await client.close()
+
+    @respx.mock
+    async def test_temp_never_seeded_raises_without_patch(self) -> None:
+        """If the converted temp doc never gets seeded in y/hub, we must NOT
+        write an empty state over real content: raise and skip the PATCH."""
+        client = DocsClient(make_config(max_retries=0))
+        target_id = "aaaa-bbbb-cccc-0001"
+        temp_id = "temp-9999"
+
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        # The converted temp doc never gets filled: fragment stays empty.
+        def empty_fragment_state() -> str:
+            d = Doc()
+            d.get("document-store", type=XmlFragment)  # ensure the key exists
+            return base64.b64encode(d.get_update()).decode()
+
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
+            return_value=Response(200, json={"doc": empty_fragment_state()})
+        )
+        delete_route = respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
+        respx.patch(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200)
+        )
+
+        with pytest.raises(DocsAPIError):
+            await client.update_document_content(target_id, "# nouveau")
+
+        # No PATCH was sent (content preserved) but the temp doc was cleaned up.
+        assert not any(
+            c.request.method == "PATCH" for c in respx.calls
+        )
+        assert delete_route.called
+        await client.close()
+
     @respx.mock
     async def test_update_content_target_not_found(self, docs_client_session: DocsClient) -> None:
+        temp_id = "temp-x"
+        respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
+        )
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("nouveau")})
+        )
+        respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
         respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/missing").mock(
             return_value=Response(404)
         )
@@ -220,14 +308,14 @@ class TestUpdateDocumentContent:
     ) -> None:
         target_id = "aaaa-bbbb-cccc-0001"
         temp_id = "temp-cleanup"
-        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
-            return_value=Response(200, json={"doc": yhub_state("ancien")})
-        )
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
         respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
             return_value=Response(200, json={"doc": yhub_state("nouveau")})
+        )
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("ancien")})
         )
         respx.patch(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
             return_value=Response(500)
@@ -237,16 +325,6 @@ class TestUpdateDocumentContent:
         with pytest.raises(DocsAPIError):
             await docs_client_session.update_document_content(target_id, "x")
         assert delete_route.called  # cleanup happened despite error
-
-    @respx.mock
-    async def test_empty_state_from_yhub_raises(self) -> None:
-        client = DocsClient(make_config(max_retries=0))
-        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/target").mock(
-            return_value=Response(200, json={"doc": ""})
-        )
-        with pytest.raises(DocsAPIError):
-            await client.update_document_content("target", "x")
-        await client.close()
 
 
 class TestGetDocument:

@@ -253,32 +253,44 @@ class DocsClient:
         # ponytail: the ``docs`` org name is hard-coded, matching the default
         # websocket URL of the frontend (``/collaboration/ws/v1/docs``). Make it
         # configurable if an instance ever exposes a different org name.
-        return f"{self._client.base_url}/collaboration/ydoc/v1/docs/{document_id}"
+        return str(self._client.base_url).rstrip("/") + f"/collaboration/ydoc/v1/docs/{document_id}"
 
-    async def _get_ydoc_state(self, document_id: str) -> bytes:
-        """Fetch the full Yjs document state from y/hub as raw update bytes."""
+    async def _get_ydoc_state(
+        self,
+        document_id: str,
+        wait_seeded: bool = False,
+    ) -> bytes:
+        """Fetch the full Yjs document state from y/hub as raw update bytes.
+
+        With ``wait_seeded=True``, retries until y/hub has populated the
+        ``document-store`` fragment, raising ``DocsAPIError`` if it never
+        fills : guards against writing an empty state over real content.
+        Otherwise (target document, default) a single GET is issued and an
+        empty state is returned as ``b""`` without waiting.
+        """
         url = self._yhub_url(document_id)
         content = ""
-        async with self._semaphore:
-            for attempt in range(self._max_retries + 1):
+        seeded = False
+        attempts = self._max_retries + 1 if wait_seeded else 1
+        for attempt in range(attempts):
+            async with self._semaphore:
                 resp = await self._client.get(url, headers={"Accept": "application/json"})
                 _raise_for_api_status(resp)
-                data = resp.json()
-                content = data.get("doc", "")
-                if attempt >= self._max_retries:
-                    break
-                # The document may not be seeded in y/hub yet: retry with backoff
-                # if the state is empty or does not yet populate a fragment.
+                content = resp.json().get("doc", "")
+                seeded = False
                 if content:
                     doc = Doc()
                     doc.apply_update(base64.b64decode(content))
-                    frag = doc.get("document-store", type=XmlFragment)
-                    if len(frag.children) > 0:
-                        break
+                    seeded = len(doc.get("document-store", type=XmlFragment).children) > 0
+            if not wait_seeded or seeded:
+                break
+            # The converted markdown should populate the fragment; keep waiting
+            # (outside the semaphore) until it does.
+            if attempt + 1 < attempts:
                 await asyncio.sleep(1.0 * (attempt + 1))
-        if not content:
-            raise DocsAPIError(500, "y/hub returned empty document state")
-        return base64.b64decode(content)
+        if wait_seeded and not seeded:
+            raise DocsAPIError(500, "y/hub never seeded the converted document state")
+        return base64.b64decode(content) if content else b""
 
     async def _markdown_to_ydoc_state(self, markdown: str) -> bytes:
         """Convert markdown to full Yjs state via the backend's own converter.
@@ -286,11 +298,17 @@ class DocsClient:
         The Y-Provider converts markdown to BlockNote/Yjs on document creation.
         We create a temporary document, read its seeded state from y/hub, then
         delete the temp document. The temp doc is cleaned up even on failure.
+
+        Blank markdown (empty or whitespace-only) is a legitimate case: no temp
+        document is created and ``b""`` is returned, meaning the target should
+        be emptied.
         """
+        if not markdown.strip():
+            return b""
         temp = await self.create_document(markdown, title="_mcp_temp_convert")
         temp_id = temp.id
         try:
-            return await self._get_ydoc_state(temp_id)
+            return await self._get_ydoc_state(temp_id, wait_seeded=True)
         finally:
             try:
                 await self.delete_document(temp_id)
@@ -311,18 +329,21 @@ class DocsClient:
         that replaces the ``document-store`` fragment. Returns the document id
         on success.
         """
-        # Server-side state: what y/hub currently holds for this document.
-        current_state = await self._get_ydoc_state(document_id)
-        # Desired state: markdown converted to Yjs via a temp document.
+        # Convert markdown to a full Yjs state first (via a temp doc, cleaned
+        # up), then read the target's current state right before building the
+        # diff to keep the concurrency window as short as possible.
         target_state = await self._markdown_to_ydoc_state(content)
+        current_state = await self._get_ydoc_state(document_id)
 
         doc = Doc()
-        doc.apply_update(current_state)
+        if current_state:
+            doc.apply_update(current_state)
         frag = doc.get("document-store", type=XmlFragment)
         state_vector = doc.get_state()
         with doc.transaction():
             del frag.children[:]
-        doc.apply_update(target_state)
+        if target_state:
+            doc.apply_update(target_state)
         update = doc.get_update(state_vector)
 
         body = self._encode_lib0_update(update)
