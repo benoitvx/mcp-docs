@@ -439,7 +439,7 @@ class DocsClient:
     ) -> PaginatedResponse[DocumentSummary]:
         """List the user's favorite documents."""
         params: dict[str, str | int] = {"page": page, "page_size": page_size}
-        data = await self._get(f"{_API_PREFIX}/documents/favorite_list/", params=params)
+        data = await self._get(f"{_API_PREFIX}/documents/favorites/", params=params)
         return PaginatedResponse[DocumentSummary].model_validate(data)
 
     async def add_favorite(self, document_id: str) -> None:
