@@ -82,7 +82,27 @@ class TestUserInfo:
     def test_defaults(self) -> None:
         user = UserInfo.model_validate({"id": "u1"})
         assert user.email == ""
+        assert user.full_name == ""
         assert user.name == ""
+
+    def test_parse_full_name_payload(self) -> None:
+        """Parse the real /users/me/ payload (full_name, short_name, ...)."""
+        user = UserInfo.model_validate(
+            {
+                "id": "u1",
+                "email": "alice@example.gouv.fr",
+                "full_name": "Alice Dupont",
+                "short_name": "Alice",
+                "language": "fr",
+                "is_first_connection": True,
+            }
+        )
+        assert user.full_name == "Alice Dupont"
+        assert user.short_name == "Alice"
+        assert user.language == "fr"
+        assert user.is_first_connection is True
+        # backward-compat alias
+        assert user.name == "Alice Dupont"
 
 
 class TestDocumentAccess:

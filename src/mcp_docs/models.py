@@ -39,7 +39,15 @@ class UserInfo(BaseModel):
 
     id: str
     email: str = ""
-    name: str = ""
+    full_name: str = ""
+    short_name: str = ""
+    language: str = ""
+    is_first_connection: bool = False
+
+    @property
+    def name(self) -> str:
+        """Return the full name (alias for backward compatibility)."""
+        return self.full_name
 
 
 # --- Access / Invitation models (used by permission tools) ---
