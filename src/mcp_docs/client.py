@@ -1,11 +1,13 @@
 """HTTP client for the Docs API (La Suite numérique)."""
 
 import asyncio
+import base64
 import logging
 import secrets
 from typing import Any
 
 import httpx
+from pycrdt import Doc, XmlFragment
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
 from mcp_docs.config import DocsConfig
@@ -221,30 +223,74 @@ class DocsClient:
         )
         return DocumentSummary.model_validate(raw)
 
-    async def _markdown_to_yjs_base64(self, markdown: str) -> str:
-        """Convert markdown to base64-encoded Yjs via the backend's own converter.
+    @staticmethod
+    def _encode_lib0_update(update: bytes) -> bytes:
+        """Encode a ``{update: bytes}`` dict in lib0 binary format (minimal, private).
 
-        The backend runs a Y-Provider service that converts markdown to the
-        BlockNote/Yjs format on document creation. We exploit this by creating
-        a temporary document with the markdown, reading its converted content
-        from the dedicated ``/content/`` endpoint (which streams the raw Yjs
-        base64 as ``text/plain``), then deleting the temp document.
+        Only supports a dict with a single ``update`` key holding a Uint8Array.
+        This matches the format expected by y/hub's HTTP fallback (lib0 ``encodeAny``).
+        """
+
+        def var_uint(value: int) -> bytes:
+            out = bytearray()
+            while True:
+                byte = value & 0x7F
+                value >>= 7
+                out.append(byte | 0x80 if value else byte)
+                if not value:
+                    return bytes(out)
+
+        def var_string(value: bytes) -> bytes:
+            return var_uint(len(value)) + value
+
+        payload = var_uint(len(update)) + update
+        body = var_uint(1) + var_string(b"update") + bytes([0x74]) + payload
+        # 0x76 = object type marker, 0x74 = Uint8Array marker
+        return bytes([0x76]) + body
+
+    def _yhub_url(self, document_id: str) -> str:
+        """Build the y/hub HTTP endpoint URL for a document."""
+        # ponytail: the ``docs`` org name is hard-coded, matching the default
+        # websocket URL of the frontend (``/collaboration/ws/v1/docs``). Make it
+        # configurable if an instance ever exposes a different org name.
+        return f"{self._client.base_url}/collaboration/ydoc/v1/docs/{document_id}"
+
+    async def _get_ydoc_state(self, document_id: str) -> bytes:
+        """Fetch the full Yjs document state from y/hub as raw update bytes."""
+        url = self._yhub_url(document_id)
+        content = ""
+        async with self._semaphore:
+            for attempt in range(self._max_retries + 1):
+                resp = await self._client.get(url, headers={"Accept": "application/json"})
+                _raise_for_api_status(resp)
+                data = resp.json()
+                content = data.get("doc", "")
+                if attempt >= self._max_retries:
+                    break
+                # The document may not be seeded in y/hub yet: retry with backoff
+                # if the state is empty or does not yet populate a fragment.
+                if content:
+                    doc = Doc()
+                    doc.apply_update(base64.b64decode(content))
+                    frag = doc.get("document-store", type=XmlFragment)
+                    if len(frag.children) > 0:
+                        break
+                await asyncio.sleep(1.0 * (attempt + 1))
+        if not content:
+            raise DocsAPIError(500, "y/hub returned empty document state")
+        return base64.b64decode(content)
+
+    async def _markdown_to_ydoc_state(self, markdown: str) -> bytes:
+        """Convert markdown to full Yjs state via the backend's own converter.
+
+        The Y-Provider converts markdown to BlockNote/Yjs on document creation.
+        We create a temporary document, read its seeded state from y/hub, then
+        delete the temp document. The temp doc is cleaned up even on failure.
         """
         temp = await self.create_document(markdown, title="_mcp_temp_convert")
         temp_id = temp.id
         try:
-            async with self._semaphore:
-                resp = await self._client.get(f"{_API_PREFIX}/documents/{temp_id}/content/")
-                _raise_for_api_status(resp)
-                content = resp.text
-            if not content.strip():
-                logger.warning(
-                    "Temp doc /content/ returned empty body (markdown=%d chars, status=%d)",
-                    len(markdown),
-                    resp.status_code,
-                )
-                raise DocsAPIError(500, "Temp doc returned empty content")
-            return content
+            return await self._get_ydoc_state(temp_id)
         finally:
             try:
                 await self.delete_document(temp_id)
@@ -258,17 +304,33 @@ class DocsClient:
     ) -> str:
         """Replace a document's content with markdown.
 
-        Markdown formatting is preserved (headings, bold, italic, lists, etc.)
-        via the backend's Y-Provider conversion service. Content is written via
-        the dedicated ``PATCH /documents/{id}/content/`` endpoint (Docs v5.0.0+,
-        PR suitenumerique/docs#2171). Returns the document id on success.
+        Docs v6.0.0 removed ``PATCH /documents/{id}/content/`` (PR
+        suitenumerique/docs#2556). Content now lives in y/hub, the Yjs
+        collaboration server. We convert the target markdown to a full Yjs
+        state via a temp document, then push a differential update to y/hub
+        that replaces the ``document-store`` fragment. Returns the document id
+        on success.
         """
-        yjs_b64 = await self._markdown_to_yjs_base64(content)
+        # Server-side state: what y/hub currently holds for this document.
+        current_state = await self._get_ydoc_state(document_id)
+        # Desired state: markdown converted to Yjs via a temp document.
+        target_state = await self._markdown_to_ydoc_state(content)
+
+        doc = Doc()
+        doc.apply_update(current_state)
+        frag = doc.get("document-store", type=XmlFragment)
+        state_vector = doc.get_state()
+        with doc.transaction():
+            del frag.children[:]
+        doc.apply_update(target_state)
+        update = doc.get_update(state_vector)
+
+        body = self._encode_lib0_update(update)
         async with self._semaphore:
             resp = await self._client.patch(
-                f"{_API_PREFIX}/documents/{document_id}/content/",
-                json={"content": yjs_b64, "websocket": True},
-                headers=self._make_csrf_headers(),
+                self._yhub_url(document_id),
+                content=body,
+                headers={"Content-Type": "application/octet-stream"},
             )
             _raise_for_api_status(resp)
         return document_id

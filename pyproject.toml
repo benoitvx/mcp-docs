@@ -13,6 +13,7 @@ dependencies = [
     "tenacity>=9.1.4",
     "pydantic-settings>=2.14.2",
     "python-multipart>=0.0.31",
+    "pycrdt>=0.14.8",
 ]
 
 [project.scripts]

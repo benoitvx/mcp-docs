@@ -31,6 +31,7 @@ from .conftest import (
     SAMPLE_DOCUMENTS,
     SAMPLE_USER,
     make_config,
+    yhub_state,
 )
 
 API = f"{BASE_URL}/api/v1.0"
@@ -245,13 +246,18 @@ class TestUpdateDocumentContentTool:
     async def test_success(self, ctx: MagicMock) -> None:
         target_id = "aaaa-bbbb-cccc-0001"
         temp_id = "temp-001"
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("ancien")})
+        )
         respx.post(f"{API}/documents/").mock(
             return_value=Response(201, json={"id": temp_id, "title": "_mcp_temp_convert"})
         )
-        respx.get(f"{API}/documents/{temp_id}/content/").mock(
-            return_value=Response(200, text="ZmFrZQ==", headers={"Content-Type": "text/plain"})
+        respx.get(f"{BASE_URL}/collaboration/ydoc/v1/docs/{temp_id}").mock(
+            return_value=Response(200, json={"doc": yhub_state("nouveau")})
         )
-        respx.patch(f"{API}/documents/{target_id}/content/").mock(return_value=Response(204))
+        respx.patch(f"{BASE_URL}/collaboration/ydoc/v1/docs/{target_id}").mock(
+            return_value=Response(200)
+        )
         respx.delete(f"{API}/documents/{temp_id}/").mock(return_value=Response(204))
 
         result = await docs_update_document_content(ctx=ctx, document_id=target_id, content="# title")
