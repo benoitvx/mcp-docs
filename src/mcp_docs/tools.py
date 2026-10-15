@@ -2,6 +2,8 @@
 
 import json
 import logging
+from pathlib import Path
+from typing import cast
 
 from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
@@ -30,6 +32,41 @@ def _error_response(err: DocsAPIError) -> str:
     if isinstance(err, DocsNotFoundError):
         return "Document not found."
     return f"Request failed (HTTP {err.status_code})."
+
+
+_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MiB
+
+
+def _file_path_to_markdown(file_path: str) -> str:
+    """Read and validate a local markdown file, returning its content.
+
+    Raises ``ValueError`` with a short generic message on any refusal. The
+    file content is never included in error messages, and the resolved path's
+    symlinks are followed.
+
+    Hard guards: absolute path, regular ``.md`` file, size <= 5 MiB, strict
+    UTF-8 read. Error messages are self-contained (they must not leak file
+    contents).
+    """
+    p = Path(file_path)
+    if not p.is_absolute():
+        raise ValueError("Error: file_path must be an absolute path to a .md file.")
+    try:
+        resolved = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ValueError("Error: file_path must point to an existing .md file.") from None
+    if not resolved.is_file():
+        raise ValueError("Error: file_path must point to a regular .md file.")
+    if resolved.suffix.lower() != ".md":
+        raise ValueError("Error: file_path must be an absolute path to a .md file.")
+    if resolved.stat().st_size > _MAX_FILE_SIZE:
+        raise ValueError("Error: file_path exceeds the 5 MiB size limit.")
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Error: file_path is not valid UTF-8 markdown.") from None
+    except OSError:
+        raise ValueError("Error: file_path could not be read.") from None
 
 
 # --- P0 Tools ---
@@ -110,21 +147,37 @@ async def docs_get_document_content(
 async def docs_create_document(
     ctx: Context,
     title: str,
-    markdown_content: str,
+    markdown_content: str | None = None,
+    file_path: str | None = None,
 ) -> str:
     """Create a new document in Docs from markdown content.
+
+    Provide markdown_content OR file_path (exactly one of the two). For a
+    large document (content > ~50 Ko), pass file_path instead of the text so
+    the MCP call stays small: the server reads the file locally.
 
     Args:
         title: Document title.
         markdown_content: Markdown content for the document body.
+        file_path: Absolute path to a local .md file (<= 5 MiB) to read.
     """
     if not title or not title.strip():
         return "Error: title is required."
-    if not markdown_content or not markdown_content.strip():
-        return "Error: markdown_content is required."
+    if (markdown_content is None) == (file_path is None):
+        return "Error: provide exactly one of markdown_content or file_path."
+    if file_path is not None:
+        try:
+            markdown = _file_path_to_markdown(file_path)
+        except ValueError as e:
+            return str(e)
+    else:
+        # markdown_content is not None here: both being None was rejected above.
+        markdown = cast(str, markdown_content)
+    if not markdown:
+        return "Error: markdown_content is empty."
 
     try:
-        data = await _get_client(ctx).create_document(markdown_content, title=title)
+        data = await _get_client(ctx).create_document(markdown, title=title)
     except DocsAPIError as e:
         return _error_response(e)
 
@@ -210,9 +263,15 @@ async def docs_update_document_title(
 async def docs_update_document_content(
     ctx: Context,
     document_id: str,
-    content: str,
+    content: str | None = None,
+    file_path: str | None = None,
 ) -> str:
     """Replace the content of a document with markdown.
+
+    Provide content OR file_path (exactly one of the two). An empty content
+    ("") is valid and empties the document. For a large document (content >
+    ~50 Ko), pass file_path instead of the text so the MCP call stays small:
+    the server reads the file locally.
 
     Markdown formatting is preserved: headings (# ##), bold (**text**),
     italic (*text*), bullet and numbered lists, blockquotes, code blocks,
@@ -220,15 +279,24 @@ async def docs_update_document_content(
 
     Args:
         document_id: UUID of the document.
-        content: New content as markdown.
+        content: New content as markdown (or None if file_path is used).
+        file_path: Absolute path to a local .md file (<= 5 MiB) to read.
     """
     if not document_id or not document_id.strip():
         return "Error: document_id is required."
-    if not content or not content.strip():
-        return "Error: content is required."
+    if (content is None) == (file_path is None):
+        return "Error: provide exactly one of content or file_path."
+    if file_path is not None:
+        try:
+            markdown = _file_path_to_markdown(file_path)
+        except ValueError as e:
+            return str(e)
+    else:
+        # content is not None here: both being None was rejected above.
+        markdown = cast(str, content)
 
     try:
-        updated_id = await _get_client(ctx).update_document_content(document_id, content)
+        updated_id = await _get_client(ctx).update_document_content(document_id, markdown)
     except DocsAPIError as e:
         return _error_response(e)
 
