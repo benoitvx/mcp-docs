@@ -67,7 +67,10 @@ SAMPLE_CREATED = {
 SAMPLE_USER = {
     "id": "user-001",
     "email": "user@example.gouv.fr",
-    "name": "Test User",
+    "full_name": "Test User",
+    "short_name": "Test",
+    "language": "fr",
+    "is_first_connection": False,
 }
 
 SAMPLE_DOCUMENT_DETAIL = {
