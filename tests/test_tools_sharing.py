@@ -87,7 +87,7 @@ class TestUpdateLinkConfigurationTool:
 class TestListFavoritesTool:
     @respx.mock
     async def test_success(self, ctx: MagicMock) -> None:
-        respx.get(f"{API}/documents/favorite_list/").mock(
+        respx.get(f"{API}/documents/favorites/").mock(
             return_value=Response(200, json=SAMPLE_DOCUMENTS)
         )
         result = await docs_list_favorites(ctx=ctx)

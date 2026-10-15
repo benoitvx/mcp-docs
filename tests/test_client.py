@@ -302,6 +302,25 @@ class TestGetMe:
         assert result.email == "user@example.gouv.fr"
 
 
+# --- list_favorites ---
+
+
+class TestListFavorites:
+    @respx.mock
+    async def test_uses_documents_favorites_endpoint(self, docs_client_session: DocsClient) -> None:
+        """The favorites list must hit /documents/favorites/ (renamed in Docs v5.7.0)."""
+        route = respx.get(f"{API}/documents/favorites/").mock(
+            return_value=Response(200, json=SAMPLE_DOCUMENTS)
+        )
+        result = await docs_client_session.list_favorites()
+        assert result.count == 2
+        assert len(result.results) == 2
+        assert route.called
+        path = route.calls[0].request.url.path
+        assert path == "/api/v1.0/documents/favorites/"
+        assert "favorite_list" not in path
+
+
 # --- list_children ---
 
 
