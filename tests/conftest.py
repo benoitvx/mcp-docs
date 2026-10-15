@@ -1,11 +1,22 @@
 """Shared test fixtures."""
 
+import base64
+
 import pytest
+from pycrdt import Doc, XmlFragment, XmlText
 
 from mcp_docs.client import DocsClient
 from mcp_docs.config import DocsConfig
 
 BASE_URL = "https://docs.test.local"
+
+
+def yhub_state(text: str = "content") -> str:
+    """Base64 y/hub state with a non-empty ``document-store`` fragment."""
+    doc = Doc()
+    frag = doc.get("document-store", type=XmlFragment)
+    frag.children.append(XmlText(text))
+    return base64.b64encode(doc.get_update()).decode()
 
 
 def make_config(**overrides: object) -> DocsConfig:
