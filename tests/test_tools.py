@@ -1,7 +1,7 @@
 """Tests for MCP tool functions."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import respx
@@ -144,6 +144,77 @@ class TestCreateDocumentTool:
         result = await docs_create_document(ctx=ctx, title="Title", markdown_content="")
         assert "Error" in result
 
+    @respx.mock
+    async def test_both_content_and_file_path(self, ctx: MagicMock, tmp_path) -> None:
+        f = tmp_path / "doc.md"
+        f.write_text("# x")
+        result = await docs_create_document(
+            ctx=ctx, title="T", markdown_content="# x", file_path=str(f)
+        )
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_neither_content_nor_file_path(self, ctx: MagicMock) -> None:
+        result = await docs_create_document(ctx=ctx, title="T")
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_relative_refused(self, ctx: MagicMock, tmp_path) -> None:
+        f = tmp_path / "doc.md"
+        f.write_text("# x")
+        result = await docs_create_document(ctx=ctx, title="T", file_path=f.name)
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_txt_extension_refused(self, ctx: MagicMock, tmp_path) -> None:
+        f = tmp_path / "doc.txt"
+        f.write_text("# x")
+        result = await docs_create_document(ctx=ctx, title="T", file_path=str(f))
+        assert "Error" in result
+        assert "file_path" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_symlink_to_txt_refused(self, ctx: MagicMock, tmp_path) -> None:
+        txt = tmp_path / "secret.txt"
+        txt.write_text("# x")
+        link = tmp_path / "doc.md"
+        link.symlink_to(txt)
+        result = await docs_create_document(ctx=ctx, title="T", file_path=str(link))
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_too_large_refused(self, ctx: MagicMock, tmp_path) -> None:
+        big = tmp_path / "big.md"
+        big.write_bytes(b"x" * (5 * 1024 * 1024 + 10))
+        result = await docs_create_document(ctx=ctx, title="T", file_path=str(big))
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_not_existing_refused(self, ctx: MagicMock, tmp_path) -> None:
+        result = await docs_create_document(ctx=ctx, title="T", file_path=str(tmp_path / "nope.md"))
+        assert "Error" in result
+        assert len(respx.calls) == 0
+
+    @respx.mock
+    async def test_file_path_valid_sends_file_content(self, ctx: MagicMock, tmp_path) -> None:
+        md = tmp_path / "doc.md"
+        content = "# Titre du fichier\n\nTexte unique XYZ123 avec **gras**."
+        md.write_text(content)
+        route = respx.post(f"{API}/documents/").mock(
+            return_value=Response(201, json=SAMPLE_CREATED)
+        )
+        result = await docs_create_document(ctx=ctx, title="New Document", file_path=str(md))
+        data = json.loads(result)
+        assert data["id"] == "aaaa-bbbb-cccc-9999"
+        # The exact file content is sent to the client (present in the body).
+        assert b"Texte unique XYZ123" in route.calls[0].request.content
+
 
 # --- docs_delete_document ---
 
@@ -269,9 +340,72 @@ class TestUpdateDocumentContentTool:
         result = await docs_update_document_content(ctx=ctx, document_id="", content="# x")
         assert "Error" in result
 
-    async def test_empty_content(self, ctx: MagicMock) -> None:
-        result = await docs_update_document_content(ctx=ctx, document_id="abc", content="")
+    @respx.mock
+    async def test_content_empty_is_valid(self, ctx: MagicMock) -> None:
+        """content="" is a valid value that empties the document: it must not
+        be rejected and is forwarded to the client as-is."""
+        client = ctx.request_context.lifespan_context.client
+        with patch.object(
+            client, "update_document_content", new=AsyncMock(return_value="abc")
+        ) as m:
+            result = await docs_update_document_content(ctx=ctx, document_id="abc", content="")
+        data = json.loads(result)
+        assert data["status"] == "updated"
+        m.assert_awaited_once_with("abc", "")
+
+    @respx.mock
+    async def test_both_content_and_file_path(self, ctx: MagicMock, tmp_path) -> None:
+        f = tmp_path / "doc.md"
+        f.write_text("# x")
+        result = await docs_update_document_content(
+            ctx=ctx, document_id="abc", content="# x", file_path=str(f)
+        )
         assert "Error" in result
+
+    @respx.mock
+    async def test_neither_content_nor_file_path(self, ctx: MagicMock) -> None:
+        result = await docs_update_document_content(ctx=ctx, document_id="abc")
+        assert "Error" in result
+
+    @respx.mock
+    async def test_file_path_txt_and_symlink_refused(self, ctx: MagicMock, tmp_path) -> None:
+        txt = tmp_path / "secret.txt"
+        txt.write_text("# x")
+        res_txt = await docs_update_document_content(
+            ctx=ctx, document_id="abc", file_path=str(txt)
+        )
+        assert "Error" in res_txt
+        link = tmp_path / "doc.md"
+        link.symlink_to(txt)
+        res_link = await docs_update_document_content(
+            ctx=ctx, document_id="abc", file_path=str(link)
+        )
+        assert "Error" in res_link
+
+    @respx.mock
+    async def test_file_path_too_large_refused(self, ctx: MagicMock, tmp_path) -> None:
+        big = tmp_path / "big.md"
+        big.write_bytes(b"x" * (5 * 1024 * 1024 + 10))
+        result = await docs_update_document_content(
+            ctx=ctx, document_id="abc", file_path=str(big)
+        )
+        assert "Error" in result
+
+    @respx.mock
+    async def test_file_path_valid_sends_exact_content(self, ctx: MagicMock, tmp_path) -> None:
+        md = tmp_path / "doc.md"
+        content = "# Contenu fichier\n\nUnique token ABCDEFGH."
+        md.write_text(content)
+        client = ctx.request_context.lifespan_context.client
+        with patch.object(
+            client, "update_document_content", new=AsyncMock(return_value="abc")
+        ) as m:
+            result = await docs_update_document_content(
+                ctx=ctx, document_id="abc", file_path=str(md)
+            )
+        data = json.loads(result)
+        assert data["status"] == "updated"
+        m.assert_awaited_once_with("abc", content)
 
 
 # --- docs_search_documents ---
